@@ -2,21 +2,24 @@ package com.example.workorder.api;
 
 import com.example.workorder.auth.CurrentUser;
 import com.example.workorder.auth.PermissionService;
+import com.example.workorder.workorder.CreateWorkOrderCommentRequest;
 import com.example.workorder.workorder.CreateWorkOrderRequest;
 import com.example.workorder.workorder.PagedWorkOrderResponse;
 import com.example.workorder.workorder.UpdateWorkOrderRequest;
+import com.example.workorder.workorder.WorkOrderCommentResponse;
 import com.example.workorder.workorder.WorkOrderListQuery;
 import com.example.workorder.workorder.WorkOrderOperationLogResponse;
 import com.example.workorder.workorder.WorkOrderResponse;
 import com.example.workorder.workorder.WorkOrderService;
 import jakarta.servlet.http.HttpSession;
 import java.util.List;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -61,6 +64,27 @@ public class WorkOrderController {
     public List<WorkOrderOperationLogResponse> logs(@PathVariable Long id, HttpSession session) {
         CurrentUser user = permissionService.requireUser(session);
         return workOrderService.listVisibleOperationLogs(id, user);
+    }
+
+    @GetMapping("/{id}/comments")
+    public List<WorkOrderCommentResponse> comments(@PathVariable Long id, HttpSession session) {
+        CurrentUser user = permissionService.requireUser(session);
+        return workOrderService.listVisibleComments(id, user);
+    }
+
+    @PostMapping("/{id}/comments")
+    public WorkOrderCommentResponse addComment(
+            @PathVariable Long id,
+            @RequestBody CreateWorkOrderCommentRequest request,
+            HttpSession session) {
+        CurrentUser user = permissionService.requireUser(session);
+        return workOrderService.addComment(id, request, user);
+    }
+
+    @DeleteMapping("/{id}/comments/{commentId}")
+    public void deleteComment(@PathVariable Long id, @PathVariable Long commentId, HttpSession session) {
+        CurrentUser user = permissionService.requireUser(session);
+        workOrderService.deleteComment(id, commentId, user);
     }
 
     @PutMapping("/{id}")

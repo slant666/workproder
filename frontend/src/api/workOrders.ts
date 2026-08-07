@@ -26,11 +26,26 @@ export interface WorkOrderOperationLog {
   createdAt: string;
 }
 
+export interface WorkOrderComment {
+  id: number;
+  workOrderId: number;
+  authorId: number;
+  authorUsername: string;
+  authorNickname: string;
+  authorRole: string;
+  content: string;
+  createdAt: string;
+}
+
 export interface CreateWorkOrderRequest {
   title: string;
   description: string;
   type: string;
   priority: string;
+}
+
+export interface CreateWorkOrderCommentRequest {
+  content: string;
 }
 
 export type UpdateWorkOrderRequest = CreateWorkOrderRequest;
@@ -97,6 +112,12 @@ export async function fetchWorkOrderLogs(id: number): Promise<WorkOrderOperation
   return response.json() as Promise<WorkOrderOperationLog[]>;
 }
 
+export async function fetchWorkOrderComments(id: number): Promise<WorkOrderComment[]> {
+  const response = await fetch(`/api/work-orders/${id}/comments`);
+  await readWorkOrderResponse(response, '\u83b7\u53d6\u5de5\u5355\u8bc4\u8bba\u5931\u8d25');
+  return response.json() as Promise<WorkOrderComment[]>;
+}
+
 export async function createWorkOrder(request: CreateWorkOrderRequest): Promise<WorkOrder> {
   const response = await fetch('/api/work-orders', {
     method: 'POST',
@@ -127,4 +148,19 @@ export async function confirmWorkOrder(id: number): Promise<WorkOrder> {
   const response = await fetch(`/api/work-orders/${id}/confirm`, { method: 'POST' });
   await readWorkOrderResponse(response, '\u786e\u8ba4\u5b8c\u6210\u5931\u8d25');
   return response.json() as Promise<WorkOrder>;
+}
+
+export async function createWorkOrderComment(id: number, request: CreateWorkOrderCommentRequest): Promise<WorkOrderComment> {
+  const response = await fetch(`/api/work-orders/${id}/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  await readWorkOrderResponse(response, '\u6dfb\u52a0\u8bc4\u8bba\u5931\u8d25');
+  return response.json() as Promise<WorkOrderComment>;
+}
+
+export async function deleteWorkOrderComment(id: number, commentId: number): Promise<void> {
+  const response = await fetch(`/api/work-orders/${id}/comments/${commentId}`, { method: 'DELETE' });
+  await readWorkOrderResponse(response, '\u5220\u9664\u8bc4\u8bba\u5931\u8d25');
 }

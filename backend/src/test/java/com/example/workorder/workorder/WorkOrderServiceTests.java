@@ -20,6 +20,7 @@ class WorkOrderServiceTests {
         DriverManagerDataSource dataSource = new DriverManagerDataSource("jdbc:h2:mem:workorders;MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         jdbcTemplate = new JdbcTemplate(dataSource);
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_operation_logs");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_comments");
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_status_transitions");
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_assignments");
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_orders");
@@ -79,6 +80,15 @@ class WorkOrderServiceTests {
                     old_value TEXT NULL,
                     new_value TEXT NULL,
                     details_json TEXT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE work_order_comments (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    work_order_id BIGINT NOT NULL,
+                    author_id BIGINT NOT NULL,
+                    content TEXT NOT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """);
@@ -557,5 +567,67 @@ class WorkOrderServiceTests {
         assertThat(workOrderService.listVisibleOperationLogs(1L, admin)).hasSize(1);
         assertThatThrownBy(() -> workOrderService.listVisibleOperationLogs(1L, other))
                 .isInstanceOf(ForbiddenException.class);
+    }
+
+    @Test
+    void authorizedUsersCanAddAndListCommentsInTimeOrderWithAuthorRole() {
+        CurrentUser owner = new CurrentUser(1L, "demo", "Demo", "USER");
+        CurrentUser admin = new CurrentUser(3L, "admin", "Admin", "ADMIN");
+
+        WorkOrderCommentResponse first = workOrderService.addComment(
+                1L,
+                new CreateWorkOrderCommentRequest("  first comment  "),
+                owner);
+        WorkOrderCommentResponse second = workOrderService.addComment(
+                1L,
+                new CreateWorkOrderCommentRequest("<script>alert(1)</script>"),
+                admin);
+
+        assertThat(first.content()).isEqualTo("first comment");
+        assertThat(second.content()).isEqualTo("<script>alert(1)</script>");
+        assertThat(workOrderService.listVisibleComments(1L, owner))
+                .extracting(WorkOrderCommentResponse::content)
+                .containsExactly("first comment", "<script>alert(1)</script>");
+        assertThat(workOrderService.listVisibleComments(1L, owner))
+                .extracting(WorkOrderCommentResponse::authorRole)
+                .containsExactly("USER", "ADMIN");
+        assertThat(workOrderService.listVisibleOperationLogs(1L, owner))
+                .extracting(WorkOrderOperationLogResponse::action)
+                .containsExactly("comment_add", "comment_add");
+    }
+
+    @Test
+    void rejectsBlankCommentsUnauthorizedUsersAndCancelledWorkOrders() {
+        CurrentUser owner = new CurrentUser(1L, "demo", "Demo", "USER");
+        CurrentUser other = new CurrentUser(2L, "other", "Other", "USER");
+
+        assertThatThrownBy(() -> workOrderService.addComment(1L, new CreateWorkOrderCommentRequest(" "), owner))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("\u8bc4\u8bba\u5185\u5bb9\u4e0d\u80fd\u4e3a\u7a7a");
+        assertThatThrownBy(() -> workOrderService.addComment(1L, new CreateWorkOrderCommentRequest("nope"), other))
+                .isInstanceOf(ForbiddenException.class);
+        assertThatThrownBy(() -> workOrderService.addComment(3L, new CreateWorkOrderCommentRequest("too late"), owner))
+                .isInstanceOf(WorkOrderStateException.class)
+                .hasMessage("\u5df2\u53d6\u6d88\u5de5\u5355\u4e0d\u80fd\u7ee7\u7eed\u8bc4\u8bba");
+        assertThatThrownBy(() -> workOrderService.listVisibleComments(1L, other))
+                .isInstanceOf(ForbiddenException.class);
+    }
+
+    @Test
+    void onlyAdminCanDeleteCommentsAndDeletionWritesOperationLog() {
+        CurrentUser owner = new CurrentUser(1L, "demo", "Demo", "USER");
+        CurrentUser admin = new CurrentUser(3L, "admin", "Admin", "ADMIN");
+
+        WorkOrderCommentResponse comment = workOrderService.addComment(1L, new CreateWorkOrderCommentRequest("remove me"), owner);
+
+        assertThatThrownBy(() -> workOrderService.deleteComment(1L, comment.id(), owner))
+                .isInstanceOf(ForbiddenException.class);
+
+        workOrderService.deleteComment(1L, comment.id(), admin);
+
+        assertThat(workOrderService.listVisibleComments(1L, owner)).isEmpty();
+        assertThat(workOrderService.listVisibleOperationLogs(1L, owner))
+                .extracting(WorkOrderOperationLogResponse::action)
+                .containsExactly("comment_add", "comment_delete");
     }
 }
