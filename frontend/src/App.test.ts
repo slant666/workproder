@@ -27,6 +27,10 @@ const workOrder = {
   handlerUsername: 'admin',
   createdAt: '2026-08-07T00:00:00Z',
 };
+const handlers = [
+  { id: 2, username: 'admin', nickname: 'Admin' },
+  { id: 3, username: 'handler', nickname: 'Handler' },
+];
 
 function mountApp() {
   return mount(App, { global: { plugins: [ElementPlus] } });
@@ -46,7 +50,9 @@ function mockApi(currentUser: unknown = null, orders: unknown[] = []) {
     if (url === '/api/work-orders/10/cancel' && method === 'POST') return okResponse({ ...workOrder, status: '已取消' });
     if (url.startsWith('/api/work-orders') && method === 'GET') return currentUser ? okResponse(paged(orders)) : okResponse({ message: '请先登录' }, 401);
     if (url === '/api/admin/overview') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse({ status: 'ok', area: 'admin' }) : okResponse({ message: 'Access denied' }, 403);
+    if (url === '/api/admin/handlers') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse(handlers) : okResponse({ message: 'Access denied' }, 403);
     if (url.startsWith('/api/admin/work-orders') && method === 'GET') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse(paged(orders)) : okResponse({ message: 'Access denied' }, 403);
+    if (url === '/api/admin/work-orders/10/handler' && method === 'PUT') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse({ ...workOrder, handlerId: 3, handlerUsername: 'handler' }) : okResponse({ message: 'Access denied' }, 403);
     if (url === '/api/auth/logout' && method === 'POST') return noContent();
     return Promise.reject(new Error(`Unexpected request: ${method} ${url}`));
   });
@@ -176,6 +182,7 @@ describe('App', () => {
     await flushPromises();
     expect(userWrapper.findAll('button').map((button) => button.text())).not.toContain('修改');
     expect(userWrapper.findAll('button').map((button) => button.text())).not.toContain('取消工单');
+    expect(userWrapper.findAll('button').map((button) => button.text())).not.toContain('确认分配');
     userWrapper.unmount();
 
     vi.restoreAllMocks();
@@ -192,6 +199,26 @@ describe('App', () => {
     await flushPromises();
     expect(adminWrapper.findAll('button').map((button) => button.text())).toContain('修改');
     expect(adminWrapper.findAll('button').map((button) => button.text())).toContain('取消工单');
+    expect(adminWrapper.findAll('button').map((button) => button.text())).toContain('确认分配');
+  });
+
+  it('assigns a pending work order handler after confirmation', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({ action: 'confirm' } as never);
+    const wrapper = await mountWithApi(admin, [workOrder]);
+    await wrapper.find('.work-order-item').trigger('click');
+    await flushPromises();
+
+    wrapper.find('.assignment-form').findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', 3);
+    await flushPromises();
+    await wrapper.find('.assignment-form').trigger('submit');
+    await flushPromises();
+
+    const assignCall = vi.mocked(globalThis.fetch).mock.calls.find(([url, init]) => url.toString() === '/api/admin/work-orders/10/handler' && init?.method === 'PUT');
+    expect(assignCall).toBeTruthy();
+    expect(JSON.parse(assignCall![1]!.body as string)).toEqual({ handlerId: 3 });
+    expect(ElMessageBox.confirm).toHaveBeenCalled();
+    expect(wrapper.text()).toContain('处理人分配成功');
+    expect(wrapper.text()).toContain('处理人handler');
   });
 
   it('updates a pending work order with only editable fields', async () => {

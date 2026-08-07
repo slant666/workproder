@@ -19,6 +19,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class WorkOrderService {
@@ -51,6 +52,50 @@ public class WorkOrderService {
         List<Object> params = new ArrayList<>();
         String where = buildListWhere(normalized, null, params);
         return listByCriteria(normalized, where, params);
+    }
+
+    public List<AdminHandlerResponse> listEnabledAdminHandlers() {
+        return jdbcTemplate.query(
+                """
+                SELECT id, username, nickname
+                FROM users
+                WHERE role = ? AND enabled = TRUE
+                ORDER BY username ASC, id ASC
+                """,
+                (rs, rowNum) -> new AdminHandlerResponse(
+                        rs.getLong("id"),
+                        rs.getString("username"),
+                        rs.getString("nickname")),
+                Role.ADMIN.name());
+    }
+
+    @Transactional
+    public WorkOrderResponse assignHandler(Long id, AssignWorkOrderRequest request, CurrentUser admin) {
+        if (admin == null || !Role.ADMIN.name().equals(admin.role())) {
+            throw new ForbiddenException();
+        }
+        if (request == null || request.handlerId() == null || request.handlerId() < 1) {
+            throw new WorkOrderException("\u5904\u7406\u4eba\u53c2\u6570\u4e0d\u6b63\u786e");
+        }
+
+        WorkOrderResponse existing = findById(id);
+        requireAssignable(existing);
+        requireEnabledAdminHandler(request.handlerId());
+
+        jdbcTemplate.update(
+                "UPDATE work_orders SET handler_id = ? WHERE id = ?",
+                request.handlerId(),
+                id);
+        jdbcTemplate.update(
+                """
+                INSERT INTO work_order_assignments (work_order_id, old_handler_id, new_handler_id, assigned_by)
+                VALUES (?, ?, ?, ?)
+                """,
+                id,
+                existing.handlerId(),
+                request.handlerId(),
+                admin.id());
+        return findById(id);
     }
 
     private PagedWorkOrderResponse listByCriteria(NormalizedListQuery normalized, String where, List<Object> params) {
@@ -334,6 +379,27 @@ public class WorkOrderService {
     private void requirePending(WorkOrderResponse workOrder) {
         if (!INITIAL_STATUS.equals(workOrder.status())) {
             throw new WorkOrderStateException("\u53ea\u6709\u5f85\u5904\u7406\u5de5\u5355\u53ef\u4ee5\u4fee\u6539\u6216\u53d6\u6d88");
+        }
+    }
+
+    private void requireAssignable(WorkOrderResponse workOrder) {
+        if (CANCELLED_STATUS.equals(workOrder.status()) || COMPLETED_STATUS.equals(workOrder.status())) {
+            throw new WorkOrderStateException("\u5df2\u5b8c\u6210\u6216\u5df2\u53d6\u6d88\u5de5\u5355\u4e0d\u80fd\u91cd\u65b0\u5206\u914d");
+        }
+    }
+
+    private void requireEnabledAdminHandler(Long handlerId) {
+        try {
+            Boolean valid = jdbcTemplate.queryForObject(
+                    "SELECT CASE WHEN role = ? AND enabled = TRUE THEN TRUE ELSE FALSE END FROM users WHERE id = ?",
+                    Boolean.class,
+                    Role.ADMIN.name(),
+                    handlerId);
+            if (!Boolean.TRUE.equals(valid)) {
+                throw new WorkOrderException("\u5904\u7406\u4eba\u5fc5\u987b\u662f\u542f\u7528\u72b6\u6001\u7684\u7ba1\u7406\u5458");
+            }
+        } catch (EmptyResultDataAccessException ex) {
+            throw new WorkOrderException("\u5904\u7406\u4eba\u4e0d\u5b58\u5728");
         }
     }
 

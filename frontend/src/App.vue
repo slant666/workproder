@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessageBox } from 'element-plus';
-import { fetchAdminOverview, fetchAdminWorkOrders } from './api/admin';
+import { assignWorkOrderHandler, fetchAdminHandlers, fetchAdminOverview, fetchAdminWorkOrders, type AdminHandler } from './api/admin';
 import { checkBackend, checkDatabase, type HealthStatus } from './api/health';
 import {
   cancelWorkOrder,
@@ -58,6 +58,7 @@ const adminWorkOrderFilters = reactive({
   createdTo: '',
   sort: 'createdAtDesc' as 'createdAtDesc' | 'createdAtAsc',
 });
+const assignmentForm = reactive({ handlerId: undefined as number | undefined });
 
 const currentView = ref<View>('login');
 const currentUser = ref<CurrentUser | null>(null);
@@ -67,6 +68,7 @@ const workOrderPage = ref(1);
 const workOrderPageSize = ref(10);
 const workOrderTotalPages = ref(0);
 const adminWorkOrders = ref<WorkOrder[]>([]);
+const adminHandlers = ref<AdminHandler[]>([]);
 const adminWorkOrderTotal = ref(0);
 const adminWorkOrderPage = ref(1);
 const adminWorkOrderPageSize = ref(10);
@@ -86,6 +88,7 @@ const isSubmitting = ref(false);
 const isWorkOrdersLoading = ref(false);
 const isDetailLoading = ref(false);
 const isAdminWorkOrdersLoading = ref(false);
+const isAdminHandlersLoading = ref(false);
 const isWorkOrderActionSubmitting = ref(false);
 const isEditingWorkOrder = ref(false);
 const workOrdersLoaded = ref(false);
@@ -97,6 +100,11 @@ const canManageSelectedWorkOrder = computed(() => {
   const user = currentUser.value;
   return Boolean(workOrder && user && workOrder.status === '待处理' && (isAdmin.value || workOrder.creatorId === user.id));
 });
+const canAssignSelectedWorkOrder = computed(() => {
+  const workOrder = selectedWorkOrder.value;
+  return Boolean(workOrder && isAdmin.value && workOrder.status === '待处理');
+});
+const selectedAssignmentHandler = computed(() => adminHandlers.value.find((handler) => handler.id === assignmentForm.handlerId));
 const pageTitle = computed(() => {
   if (currentView.value === 'admin') return '管理页面';
   if (currentView.value === 'profile') return '个人资料';
@@ -230,6 +238,22 @@ function optionalPositiveNumber(value: number | undefined) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+async function loadAdminHandlers() {
+  if (!currentUser.value || !isAdmin.value) {
+    adminHandlers.value = [];
+    return;
+  }
+  isAdminHandlersLoading.value = true;
+  try {
+    adminHandlers.value = await fetchAdminHandlers();
+  } catch (error) {
+    adminHandlers.value = [];
+    adminError.value = error instanceof Error ? error.message : '获取处理人列表失败';
+  } finally {
+    isAdminHandlersLoading.value = false;
+  }
+}
+
 async function loadAdminWorkOrders(options: { resetPage?: boolean } = {}) {
   if (!currentUser.value || !isAdmin.value) {
     currentView.value = 'login';
@@ -241,6 +265,9 @@ async function loadAdminWorkOrders(options: { resetPage?: boolean } = {}) {
   isAdminWorkOrdersLoading.value = true;
   adminError.value = '';
   try {
+    if (adminHandlers.value.length === 0) {
+      await loadAdminHandlers();
+    }
     const response = await fetchAdminWorkOrders({
       keyword: adminWorkOrderFilters.keyword,
       status: adminWorkOrderFilters.status,
@@ -297,10 +324,52 @@ async function openWorkOrderDetail(id: number) {
   isEditingWorkOrder.value = false;
   try {
     selectedWorkOrder.value = await fetchWorkOrderDetail(id);
+    assignmentForm.handlerId = selectedWorkOrder.value.handlerId ?? undefined;
+    if (isAdmin.value && adminHandlers.value.length === 0) {
+      await loadAdminHandlers();
+    }
   } catch (error) {
     detailError.value = error instanceof Error ? error.message : '获取工单详情失败';
   } finally {
     isDetailLoading.value = false;
+  }
+}
+
+async function submitHandlerAssignment() {
+  const workOrder = selectedWorkOrder.value;
+  const handler = selectedAssignmentHandler.value;
+  if (!workOrder || !canAssignSelectedWorkOrder.value || !assignmentForm.handlerId || !handler) return;
+
+  const oldHandler = workOrder.handlerUsername || '未分配';
+  const newHandler = `${handler.nickname}（${handler.username}）`;
+  try {
+    await ElMessageBox.confirm(
+      `确定将工单「${workOrder.title}」的处理人从「${oldHandler}」分配为「${newHandler}」吗？`,
+      '分配处理人',
+      {
+        confirmButtonText: '确认分配',
+        cancelButtonText: '返回',
+        type: 'warning',
+      },
+    );
+  } catch {
+    return;
+  }
+
+  detailError.value = '';
+  workOrderMessage.value = '';
+  isWorkOrderActionSubmitting.value = true;
+  try {
+    const updated = await assignWorkOrderHandler(workOrder.id, assignmentForm.handlerId);
+    selectedWorkOrder.value = updated;
+    assignmentForm.handlerId = updated.handlerId ?? undefined;
+    adminWorkOrders.value = adminWorkOrders.value.map((item) => (item.id === updated.id ? updated : item));
+    workOrders.value = workOrders.value.map((item) => (item.id === updated.id ? updated : item));
+    workOrderMessage.value = '处理人分配成功';
+  } catch (error) {
+    detailError.value = error instanceof Error ? error.message : '分配处理人失败';
+  } finally {
+    isWorkOrderActionSubmitting.value = false;
   }
 }
 
@@ -433,6 +502,7 @@ async function openAdmin() {
   try {
     await fetchAdminOverview();
     currentView.value = 'admin';
+    await loadAdminHandlers();
     await loadAdminWorkOrders();
   } catch (error) {
     adminLoaded.value = false;
@@ -770,8 +840,33 @@ onMounted(() => {
                   <div><dt>优先级</dt><dd>{{ selectedWorkOrder.priority }}</dd></div>
                   <div><dt>状态</dt><dd>{{ selectedWorkOrder.status }}</dd></div>
                   <div><dt>创建人</dt><dd>{{ selectedWorkOrder.creatorUsername }}</dd></div>
+                  <div><dt>处理人</dt><dd>{{ selectedWorkOrder.handlerUsername || '未分配' }}</dd></div>
                   <div><dt>创建时间</dt><dd>{{ formatTime(selectedWorkOrder.createdAt) }}</dd></div>
                 </dl>
+                <el-form v-if="canAssignSelectedWorkOrder" class="assignment-form" label-position="top" @submit.prevent="submitHandlerAssignment">
+                  <el-form-item label="选择处理人">
+                    <el-select
+                      v-model="assignmentForm.handlerId"
+                      filterable
+                      placeholder="请选择启用状态的管理员"
+                      :loading="isAdminHandlersLoading"
+                      :disabled="isWorkOrderActionSubmitting"
+                    >
+                      <el-option
+                        v-for="handler in adminHandlers"
+                        :key="handler.id"
+                        :label="`${handler.nickname}（${handler.username}）`"
+                        :value="handler.id"
+                      />
+                    </el-select>
+                  </el-form-item>
+                  <el-button
+                    native-type="submit"
+                    type="primary"
+                    :disabled="!selectedAssignmentHandler"
+                    :loading="isWorkOrderActionSubmitting"
+                  >确认分配</el-button>
+                </el-form>
                 <div class="detail-actions">
                   <el-button @click="openWorkOrders">返回工单</el-button>
                   <el-button v-if="canManageSelectedWorkOrder" type="primary" @click="startEditingWorkOrder">修改</el-button>

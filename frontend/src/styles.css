@@ -272,6 +272,13 @@ h2 {
   align-items: center;
 }
 
+.assignment-form {
+  display: grid;
+  gap: 2px;
+  max-width: 360px;
+  margin: 0 0 20px;
+}
+
 @media (max-width: 860px) {
   .work-order-filters {
     grid-template-columns: 1fr;
