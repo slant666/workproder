@@ -19,6 +19,7 @@ class WorkOrderServiceTests {
     void setUp() {
         DriverManagerDataSource dataSource = new DriverManagerDataSource("jdbc:h2:mem:workorders;MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         jdbcTemplate = new JdbcTemplate(dataSource);
+        jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_assignments");
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_orders");
         jdbcTemplate.execute("DROP TABLE IF EXISTS users");
         jdbcTemplate.execute("""
@@ -45,12 +46,26 @@ class WorkOrderServiceTests {
                     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 )
                 """);
+        jdbcTemplate.execute("""
+                CREATE TABLE work_order_assignments (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    work_order_id BIGINT NOT NULL,
+                    old_handler_id BIGINT NULL,
+                    new_handler_id BIGINT NOT NULL,
+                    assigned_by BIGINT NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """);
         jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, TRUE)",
                 "demo", "演示用户", "hash", "USER");
         jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, TRUE)",
                 "other", "其他用户", "hash", "USER");
         jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, TRUE)",
                 "admin", "管理员", "hash", "ADMIN");
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, TRUE)",
+                "handler", "Handler", "hash", "ADMIN");
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, FALSE)",
+                "disabled", "Disabled", "hash", "ADMIN");
         jdbcTemplate.update("INSERT INTO work_orders (title, description, type, priority, status, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
                 "自己的工单", "自己的描述", "设备维修", "中", "待处理", 1L);
         jdbcTemplate.update("INSERT INTO work_orders (title, description, type, priority, status, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
@@ -288,5 +303,84 @@ class WorkOrderServiceTests {
         assertThat(workOrderService.cancel(2L, admin).status()).isEqualTo("已取消");
         assertThatThrownBy(() -> workOrderService.cancel(4L, admin))
                 .isInstanceOf(WorkOrderStateException.class);
+    }
+    @Test
+    void listsOnlyEnabledAdminHandlers() {
+        assertThat(workOrderService.listEnabledAdminHandlers())
+                .extracting(AdminHandlerResponse::username)
+                .containsExactly("admin", "handler");
+    }
+
+    @Test
+    void adminAssignsAndReassignsPendingWorkOrderWithHistory() {
+        CurrentUser admin = new CurrentUser(3L, "admin", "Admin", "ADMIN");
+
+        WorkOrderResponse assigned = workOrderService.assignHandler(1L, new AssignWorkOrderRequest(4L), admin);
+        WorkOrderResponse reassigned = workOrderService.assignHandler(1L, new AssignWorkOrderRequest(3L), admin);
+
+        assertThat(assigned.handlerId()).isEqualTo(4L);
+        assertThat(assigned.handlerUsername()).isEqualTo("handler");
+        assertThat(reassigned.handlerId()).isEqualTo(3L);
+        assertThat(reassigned.handlerUsername()).isEqualTo("admin");
+        assertThat(jdbcTemplate.queryForList(
+                "SELECT old_handler_id, new_handler_id, assigned_by FROM work_order_assignments WHERE work_order_id = ? ORDER BY id",
+                1L))
+                .hasSize(2)
+                .satisfies(rows -> {
+                    assertThat(rows.get(0).get("OLD_HANDLER_ID")).isNull();
+                    assertThat(((Number) rows.get(0).get("NEW_HANDLER_ID")).longValue()).isEqualTo(4L);
+                    assertThat(((Number) rows.get(0).get("ASSIGNED_BY")).longValue()).isEqualTo(3L);
+                    assertThat(((Number) rows.get(1).get("OLD_HANDLER_ID")).longValue()).isEqualTo(4L);
+                    assertThat(((Number) rows.get(1).get("NEW_HANDLER_ID")).longValue()).isEqualTo(3L);
+                    assertThat(((Number) rows.get(1).get("ASSIGNED_BY")).longValue()).isEqualTo(3L);
+                });
+    }
+
+    @Test
+    void rejectsAssigningToRegularUserDisabledAdminOrMissingUser() {
+        CurrentUser admin = new CurrentUser(3L, "admin", "Admin", "ADMIN");
+
+        assertThatThrownBy(() -> workOrderService.assignHandler(1L, new AssignWorkOrderRequest(1L), admin))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("\u5904\u7406\u4eba\u5fc5\u987b\u662f\u542f\u7528\u72b6\u6001\u7684\u7ba1\u7406\u5458");
+        assertThatThrownBy(() -> workOrderService.assignHandler(1L, new AssignWorkOrderRequest(5L), admin))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("\u5904\u7406\u4eba\u5fc5\u987b\u662f\u542f\u7528\u72b6\u6001\u7684\u7ba1\u7406\u5458");
+        assertThatThrownBy(() -> workOrderService.assignHandler(1L, new AssignWorkOrderRequest(404L), admin))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("\u5904\u7406\u4eba\u4e0d\u5b58\u5728");
+    }
+
+    @Test
+    void regularUserCannotAssignHandler() {
+        CurrentUser user = new CurrentUser(1L, "demo", "Demo", "USER");
+
+        assertThatThrownBy(() -> workOrderService.assignHandler(1L, new AssignWorkOrderRequest(4L), user))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage("Access denied");
+    }
+
+    @Test
+    void rejectsAssigningCancelledOrCompletedWorkOrder() {
+        CurrentUser admin = new CurrentUser(3L, "admin", "Admin", "ADMIN");
+
+        assertThatThrownBy(() -> workOrderService.assignHandler(3L, new AssignWorkOrderRequest(4L), admin))
+                .isInstanceOf(WorkOrderStateException.class)
+                .hasMessage("\u5df2\u5b8c\u6210\u6216\u5df2\u53d6\u6d88\u5de5\u5355\u4e0d\u80fd\u91cd\u65b0\u5206\u914d");
+        assertThatThrownBy(() -> workOrderService.assignHandler(4L, new AssignWorkOrderRequest(4L), admin))
+                .isInstanceOf(WorkOrderStateException.class)
+                .hasMessage("\u5df2\u5b8c\u6210\u6216\u5df2\u53d6\u6d88\u5de5\u5355\u4e0d\u80fd\u91cd\u65b0\u5206\u914d");
+    }
+
+    @Test
+    void rejectsInvalidHandlerIdWhenAssigning() {
+        CurrentUser admin = new CurrentUser(3L, "admin", "Admin", "ADMIN");
+
+        assertThatThrownBy(() -> workOrderService.assignHandler(1L, new AssignWorkOrderRequest(null), admin))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("\u5904\u7406\u4eba\u53c2\u6570\u4e0d\u6b63\u786e");
+        assertThatThrownBy(() -> workOrderService.assignHandler(1L, new AssignWorkOrderRequest(0L), admin))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("\u5904\u7406\u4eba\u53c2\u6570\u4e0d\u6b63\u786e");
     }
 }

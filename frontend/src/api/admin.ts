@@ -1,10 +1,16 @@
-import type { PagedWorkOrders, WorkOrderListQuery } from './workOrders';
+import type { PagedWorkOrders, WorkOrder, WorkOrderListQuery } from './workOrders';
 
 export interface AdminWorkOrderListQuery extends WorkOrderListQuery {
   creatorId?: number;
   handlerId?: number;
   createdFrom?: string;
   createdTo?: string;
+}
+
+export interface AdminHandler {
+  id: number;
+  username: string;
+  nickname: string;
 }
 
 async function readAdminError(response: Response, fallback: string) {
@@ -61,4 +67,40 @@ export async function fetchAdminWorkOrders(query: AdminWorkOrderListQuery = {}):
   }
 
   return response.json() as Promise<PagedWorkOrders>;
+}
+
+export async function fetchAdminHandlers(): Promise<AdminHandler[]> {
+  const response = await fetch('/api/admin/handlers');
+
+  if (response.status === 401) {
+    throw new Error('\u8bf7\u5148\u767b\u5f55');
+  }
+  if (response.status === 403) {
+    throw new Error(await readAdminError(response, 'Access denied'));
+  }
+  if (!response.ok) {
+    throw new Error(await readAdminError(response, '\u83b7\u53d6\u5904\u7406\u4eba\u5217\u8868\u5931\u8d25'));
+  }
+
+  return response.json() as Promise<AdminHandler[]>;
+}
+
+export async function assignWorkOrderHandler(id: number, handlerId: number): Promise<WorkOrder> {
+  const response = await fetch(`/api/admin/work-orders/${id}/handler`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ handlerId }),
+  });
+
+  if (response.status === 401) {
+    throw new Error('\u8bf7\u5148\u767b\u5f55');
+  }
+  if (response.status === 403) {
+    throw new Error(await readAdminError(response, 'Access denied'));
+  }
+  if (!response.ok) {
+    throw new Error(await readAdminError(response, '\u5206\u914d\u5904\u7406\u4eba\u5931\u8d25'));
+  }
+
+  return response.json() as Promise<WorkOrder>;
 }
