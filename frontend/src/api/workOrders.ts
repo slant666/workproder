@@ -37,6 +37,18 @@ export interface WorkOrderComment {
   createdAt: string;
 }
 
+export interface WorkOrderAttachment {
+  id: number;
+  workOrderId: number;
+  uploaderId: number;
+  uploaderUsername: string;
+  uploaderNickname: string;
+  originalFilename: string;
+  contentType: string;
+  fileSize: number;
+  createdAt: string;
+}
+
 export interface CreateWorkOrderRequest {
   title: string;
   description: string;
@@ -118,6 +130,12 @@ export async function fetchWorkOrderComments(id: number): Promise<WorkOrderComme
   return response.json() as Promise<WorkOrderComment[]>;
 }
 
+export async function fetchWorkOrderAttachments(id: number): Promise<WorkOrderAttachment[]> {
+  const response = await fetch(`/api/work-orders/${id}/attachments`);
+  await readWorkOrderResponse(response, '\u83b7\u53d6\u5de5\u5355\u9644\u4ef6\u5931\u8d25');
+  return response.json() as Promise<WorkOrderAttachment[]>;
+}
+
 export async function createWorkOrder(request: CreateWorkOrderRequest): Promise<WorkOrder> {
   const response = await fetch('/api/work-orders', {
     method: 'POST',
@@ -163,4 +181,19 @@ export async function createWorkOrderComment(id: number, request: CreateWorkOrde
 export async function deleteWorkOrderComment(id: number, commentId: number): Promise<void> {
   const response = await fetch(`/api/work-orders/${id}/comments/${commentId}`, { method: 'DELETE' });
   await readWorkOrderResponse(response, '\u5220\u9664\u8bc4\u8bba\u5931\u8d25');
+}
+
+export async function uploadWorkOrderAttachment(id: number, file: File): Promise<WorkOrderAttachment> {
+  const body = new FormData();
+  body.append('file', file);
+  const response = await fetch(`/api/work-orders/${id}/attachments`, {
+    method: 'POST',
+    body,
+  });
+  await readWorkOrderResponse(response, '\u4e0a\u4f20\u9644\u4ef6\u5931\u8d25');
+  return response.json() as Promise<WorkOrderAttachment>;
+}
+
+export function workOrderAttachmentDownloadUrl(id: number, attachmentId: number) {
+  return `/api/work-orders/${id}/attachments/${attachmentId}/download`;
 }

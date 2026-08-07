@@ -16,6 +16,8 @@ frontend/coverage/
 # Backend
 backend/target/
 backend/.mvn/wrapper/maven-wrapper.jar
+uploads/
+backend/uploads/
 
 # Environment
 .env

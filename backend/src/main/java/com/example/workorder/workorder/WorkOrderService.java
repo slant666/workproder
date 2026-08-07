@@ -252,6 +252,10 @@ public class WorkOrderService {
         return response;
     }
 
+    public WorkOrderResponse requireVisibleWorkOrder(Long id, CurrentUser currentUser) {
+        return getVisibleDetail(id, currentUser);
+    }
+
     @Transactional
     public WorkOrderResponse update(Long id, UpdateWorkOrderRequest request, CurrentUser currentUser) {
         WorkOrderResponse existing = findById(id);

@@ -271,13 +271,15 @@ h2 {
   border-top: 1px solid #e5e7eb;
 }
 
-.comment-section {
+.comment-section,
+.attachment-section {
   margin: 18px 0 22px;
   padding-top: 18px;
   border-top: 1px solid #e5e7eb;
 }
 
-.comment-section h4 {
+.comment-section h4,
+.attachment-section h4 {
   margin: 0 0 14px;
   color: #111827;
   font-size: 16px;
@@ -320,6 +322,54 @@ h2 {
   display: grid;
   gap: 2px;
   margin-top: 14px;
+}
+
+.attachment-list {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0 16px;
+}
+
+.attachment-item {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.attachment-item .item-meta {
+  display: block;
+  margin-top: 2px;
+}
+
+.file-upload-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid #409eff;
+  border-radius: 4px;
+  color: #409eff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.file-upload-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.file-upload-button:has(input:disabled) {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .operation-log-section h4 {
@@ -367,5 +417,10 @@ h2 {
 
   .admin-work-order-filters {
     grid-template-columns: 1fr;
+  }
+
+  .attachment-item {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

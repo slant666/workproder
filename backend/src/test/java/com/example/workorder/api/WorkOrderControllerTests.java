@@ -9,6 +9,10 @@ import com.example.workorder.workorder.CreateWorkOrderCommentRequest;
 import com.example.workorder.workorder.CreateWorkOrderRequest;
 import com.example.workorder.workorder.PagedWorkOrderResponse;
 import com.example.workorder.workorder.UpdateWorkOrderRequest;
+import com.example.workorder.workorder.WorkOrderAttachmentDownload;
+import com.example.workorder.workorder.WorkOrderAttachmentProperties;
+import com.example.workorder.workorder.WorkOrderAttachmentResponse;
+import com.example.workorder.workorder.WorkOrderAttachmentService;
 import com.example.workorder.workorder.WorkOrderCommentResponse;
 import com.example.workorder.workorder.WorkOrderListQuery;
 import com.example.workorder.workorder.WorkOrderOperationLogResponse;
@@ -17,7 +21,11 @@ import com.example.workorder.workorder.WorkOrderService;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpSession;
+import org.springframework.mock.web.MockMultipartFile;
 
 class WorkOrderControllerTests {
 
@@ -29,7 +37,7 @@ class WorkOrderControllerTests {
     @Test
     void listsVisibleWorkOrdersForCurrentUser() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        WorkOrderController controller = controller(workOrderService, new FakeAttachmentService());
         MockHttpSession session = session(new CurrentUser(1L, "demo", "Demo", "USER"));
 
         assertThat(controller.list(null, null, null, null, null, null, session).items()).isEmpty();
@@ -39,7 +47,7 @@ class WorkOrderControllerTests {
     @Test
     void passesListQueryParametersToService() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        WorkOrderController controller = controller(workOrderService, new FakeAttachmentService());
         MockHttpSession session = session(new CurrentUser(1L, "demo", "Demo", "USER"));
 
         controller.list("printer", PENDING, HIGH, "createdAtAsc", 2, 20, session);
@@ -51,7 +59,7 @@ class WorkOrderControllerTests {
     @Test
     void createsWorkOrderForCurrentSessionUser() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        WorkOrderController controller = controller(workOrderService, new FakeAttachmentService());
         MockHttpSession session = session(new CurrentUser(7L, "demo", "Demo", "USER"));
 
         WorkOrderResponse response = controller.create(
@@ -66,7 +74,7 @@ class WorkOrderControllerTests {
     @Test
     void loadsDetailForCurrentSessionUser() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        WorkOrderController controller = controller(workOrderService, new FakeAttachmentService());
         MockHttpSession session = session(new CurrentUser(3L, "admin", "Admin", "ADMIN"));
 
         WorkOrderResponse response = controller.detail(10L, session);
@@ -79,7 +87,7 @@ class WorkOrderControllerTests {
     @Test
     void loadsOperationLogsForCurrentSessionUser() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        WorkOrderController controller = controller(workOrderService, new FakeAttachmentService());
         MockHttpSession session = session(new CurrentUser(3L, "admin", "Admin", "ADMIN"));
 
         List<WorkOrderOperationLogResponse> response = controller.logs(10L, session);
@@ -92,7 +100,7 @@ class WorkOrderControllerTests {
     @Test
     void loadsCommentsForCurrentSessionUser() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        WorkOrderController controller = controller(workOrderService, new FakeAttachmentService());
         MockHttpSession session = session(new CurrentUser(7L, "demo", "Demo", "USER"));
 
         List<WorkOrderCommentResponse> response = controller.comments(10L, session);
@@ -105,7 +113,7 @@ class WorkOrderControllerTests {
     @Test
     void addsCommentForCurrentSessionUser() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        WorkOrderController controller = controller(workOrderService, new FakeAttachmentService());
         MockHttpSession session = session(new CurrentUser(7L, "demo", "Demo", "USER"));
         CreateWorkOrderCommentRequest request = new CreateWorkOrderCommentRequest("Hello");
 
@@ -120,7 +128,7 @@ class WorkOrderControllerTests {
     @Test
     void deletesCommentForCurrentSessionUser() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        WorkOrderController controller = controller(workOrderService, new FakeAttachmentService());
         MockHttpSession session = session(new CurrentUser(3L, "admin", "Admin", "ADMIN"));
 
         controller.deleteComment(10L, 99L, session);
@@ -133,7 +141,7 @@ class WorkOrderControllerTests {
     @Test
     void updatesWorkOrderForCurrentSessionUser() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        WorkOrderController controller = controller(workOrderService, new FakeAttachmentService());
         MockHttpSession session = session(new CurrentUser(7L, "demo", "Demo", "USER"));
         UpdateWorkOrderRequest request = new UpdateWorkOrderRequest("New title", "New description", "Account", LOW);
 
@@ -148,7 +156,7 @@ class WorkOrderControllerTests {
     @Test
     void cancelsWorkOrderForCurrentSessionUser() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        WorkOrderController controller = controller(workOrderService, new FakeAttachmentService());
         MockHttpSession session = session(new CurrentUser(3L, "admin", "Admin", "ADMIN"));
 
         WorkOrderResponse response = controller.cancel(10L, session);
@@ -161,7 +169,7 @@ class WorkOrderControllerTests {
     @Test
     void confirmsWorkOrderForCurrentSessionUser() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        WorkOrderController controller = controller(workOrderService, new FakeAttachmentService());
         MockHttpSession session = session(new CurrentUser(7L, "demo", "Demo", "USER"));
 
         WorkOrderResponse response = controller.confirm(10L, session);
@@ -169,6 +177,33 @@ class WorkOrderControllerTests {
         assertThat(workOrderService.confirmedId).isEqualTo(10L);
         assertThat(workOrderService.visibleUser.id()).isEqualTo(7L);
         assertThat(response.status()).isEqualTo("\u5df2\u5b8c\u6210");
+    }
+
+    @Test
+    void handlesAttachmentsForCurrentSessionUser() {
+        FakeWorkOrderService workOrderService = new FakeWorkOrderService();
+        FakeAttachmentService attachmentService = new FakeAttachmentService();
+        WorkOrderController controller = controller(workOrderService, attachmentService);
+        MockHttpSession session = session(new CurrentUser(7L, "demo", "Demo", "USER"));
+        MockMultipartFile file = new MockMultipartFile("file", "photo.png", "image/png", new byte[] {1, 2, 3});
+
+        List<WorkOrderAttachmentResponse> list = controller.attachments(10L, session);
+        WorkOrderAttachmentResponse uploaded = controller.uploadAttachment(10L, file, session);
+        ResponseEntity<Resource> download = controller.downloadAttachment(10L, 5L, session);
+
+        assertThat(attachmentService.listWorkOrderId).isEqualTo(10L);
+        assertThat(attachmentService.uploadWorkOrderId).isEqualTo(10L);
+        assertThat(attachmentService.uploadedFile).isSameAs(file);
+        assertThat(attachmentService.downloadWorkOrderId).isEqualTo(10L);
+        assertThat(attachmentService.downloadAttachmentId).isEqualTo(5L);
+        assertThat(attachmentService.visibleUser.id()).isEqualTo(7L);
+        assertThat(list).extracting(WorkOrderAttachmentResponse::originalFilename).containsExactly("photo.png");
+        assertThat(uploaded.originalFilename()).isEqualTo("photo.png");
+        assertThat(download.getHeaders().getFirst("Content-Disposition")).contains("filename*=UTF-8''photo.png");
+    }
+
+    private WorkOrderController controller(FakeWorkOrderService workOrderService, FakeAttachmentService attachmentService) {
+        return new WorkOrderController(new PermissionService(), workOrderService, attachmentService);
     }
 
     private MockHttpSession session(CurrentUser user) {
@@ -312,4 +347,54 @@ class WorkOrderControllerTests {
                     Instant.parse("2026-08-07T00:00:00Z"));
         }
     }
+
+    private static class FakeAttachmentService extends WorkOrderAttachmentService {
+        private CurrentUser visibleUser;
+        private Long listWorkOrderId;
+        private Long uploadWorkOrderId;
+        private Long downloadWorkOrderId;
+        private Long downloadAttachmentId;
+        private MockMultipartFile uploadedFile;
+
+        FakeAttachmentService() {
+            super(null, null, new WorkOrderAttachmentProperties("uploads/test", 10));
+        }
+
+        @Override
+        public List<WorkOrderAttachmentResponse> listVisibleAttachments(Long workOrderId, CurrentUser currentUser) {
+            listWorkOrderId = workOrderId;
+            visibleUser = currentUser;
+            return List.of(response(workOrderId));
+        }
+
+        @Override
+        public WorkOrderAttachmentResponse upload(Long workOrderId, org.springframework.web.multipart.MultipartFile file, CurrentUser currentUser) {
+            uploadWorkOrderId = workOrderId;
+            uploadedFile = (MockMultipartFile) file;
+            visibleUser = currentUser;
+            return response(workOrderId);
+        }
+
+        @Override
+        public WorkOrderAttachmentDownload download(Long workOrderId, Long attachmentId, CurrentUser currentUser) {
+            downloadWorkOrderId = workOrderId;
+            downloadAttachmentId = attachmentId;
+            visibleUser = currentUser;
+            return new WorkOrderAttachmentDownload(response(workOrderId), new ByteArrayResource(new byte[] {1, 2, 3}));
+        }
+
+        private WorkOrderAttachmentResponse response(Long workOrderId) {
+            return new WorkOrderAttachmentResponse(
+                    5L,
+                    workOrderId,
+                    7L,
+                    "demo",
+                    "Demo",
+                    "photo.png",
+                    "image/png",
+                    3L,
+                    Instant.parse("2026-08-07T00:00:00Z"));
+        }
+    }
 }
+
