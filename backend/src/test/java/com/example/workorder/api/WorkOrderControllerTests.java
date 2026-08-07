@@ -5,9 +5,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.example.workorder.auth.CurrentUser;
 import com.example.workorder.auth.PermissionService;
 import com.example.workorder.auth.SessionKeys;
+import com.example.workorder.workorder.CreateWorkOrderCommentRequest;
 import com.example.workorder.workorder.CreateWorkOrderRequest;
 import com.example.workorder.workorder.PagedWorkOrderResponse;
 import com.example.workorder.workorder.UpdateWorkOrderRequest;
+import com.example.workorder.workorder.WorkOrderCommentResponse;
 import com.example.workorder.workorder.WorkOrderListQuery;
 import com.example.workorder.workorder.WorkOrderOperationLogResponse;
 import com.example.workorder.workorder.WorkOrderResponse;
@@ -88,6 +90,47 @@ class WorkOrderControllerTests {
     }
 
     @Test
+    void loadsCommentsForCurrentSessionUser() {
+        FakeWorkOrderService workOrderService = new FakeWorkOrderService();
+        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        MockHttpSession session = session(new CurrentUser(7L, "demo", "Demo", "USER"));
+
+        List<WorkOrderCommentResponse> response = controller.comments(10L, session);
+
+        assertThat(workOrderService.commentDetailId).isEqualTo(10L);
+        assertThat(workOrderService.visibleUser.id()).isEqualTo(7L);
+        assertThat(response).extracting(WorkOrderCommentResponse::content).containsExactly("Looks good");
+    }
+
+    @Test
+    void addsCommentForCurrentSessionUser() {
+        FakeWorkOrderService workOrderService = new FakeWorkOrderService();
+        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        MockHttpSession session = session(new CurrentUser(7L, "demo", "Demo", "USER"));
+        CreateWorkOrderCommentRequest request = new CreateWorkOrderCommentRequest("Hello");
+
+        WorkOrderCommentResponse response = controller.addComment(10L, request, session);
+
+        assertThat(workOrderService.addCommentWorkOrderId).isEqualTo(10L);
+        assertThat(workOrderService.addCommentRequest).isSameAs(request);
+        assertThat(workOrderService.visibleUser.id()).isEqualTo(7L);
+        assertThat(response.authorId()).isEqualTo(7L);
+    }
+
+    @Test
+    void deletesCommentForCurrentSessionUser() {
+        FakeWorkOrderService workOrderService = new FakeWorkOrderService();
+        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        MockHttpSession session = session(new CurrentUser(3L, "admin", "Admin", "ADMIN"));
+
+        controller.deleteComment(10L, 99L, session);
+
+        assertThat(workOrderService.deleteCommentWorkOrderId).isEqualTo(10L);
+        assertThat(workOrderService.deletedCommentId).isEqualTo(99L);
+        assertThat(workOrderService.visibleUser.id()).isEqualTo(3L);
+    }
+
+    @Test
     void updatesWorkOrderForCurrentSessionUser() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
         WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
@@ -139,9 +182,14 @@ class WorkOrderControllerTests {
         private CurrentUser creator;
         private Long detailId;
         private Long logDetailId;
+        private Long commentDetailId;
+        private Long addCommentWorkOrderId;
+        private Long deleteCommentWorkOrderId;
+        private Long deletedCommentId;
         private Long updatedId;
         private Long cancelledId;
         private Long confirmedId;
+        private CreateWorkOrderCommentRequest addCommentRequest;
         private UpdateWorkOrderRequest updateRequest;
         private WorkOrderListQuery query;
 
@@ -185,6 +233,44 @@ class WorkOrderControllerTests {
                     "Printer issue",
                     null,
                     Instant.parse("2026-08-07T00:00:00Z")));
+        }
+
+        @Override
+        public List<WorkOrderCommentResponse> listVisibleComments(Long id, CurrentUser currentUser) {
+            commentDetailId = id;
+            visibleUser = currentUser;
+            return List.of(new WorkOrderCommentResponse(
+                    1L,
+                    id,
+                    currentUser.id(),
+                    currentUser.username(),
+                    currentUser.nickname(),
+                    currentUser.role(),
+                    "Looks good",
+                    Instant.parse("2026-08-07T00:00:00Z")));
+        }
+
+        @Override
+        public WorkOrderCommentResponse addComment(Long id, CreateWorkOrderCommentRequest request, CurrentUser currentUser) {
+            addCommentWorkOrderId = id;
+            addCommentRequest = request;
+            visibleUser = currentUser;
+            return new WorkOrderCommentResponse(
+                    2L,
+                    id,
+                    currentUser.id(),
+                    currentUser.username(),
+                    currentUser.nickname(),
+                    currentUser.role(),
+                    request.content(),
+                    Instant.parse("2026-08-07T01:00:00Z"));
+        }
+
+        @Override
+        public void deleteComment(Long id, Long commentId, CurrentUser currentUser) {
+            deleteCommentWorkOrderId = id;
+            deletedCommentId = commentId;
+            visibleUser = currentUser;
         }
 
         @Override

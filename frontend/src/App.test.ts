@@ -59,6 +59,28 @@ const operationLogs = [
     createdAt: '2026-08-07T01:00:00Z',
   },
 ];
+const comments = [
+  {
+    id: 1,
+    workOrderId: 10,
+    authorId: 1,
+    authorUsername: 'demo',
+    authorNickname: 'Demo',
+    authorRole: 'USER',
+    content: '普通评论',
+    createdAt: '2026-08-07T02:00:00Z',
+  },
+  {
+    id: 2,
+    workOrderId: 10,
+    authorId: 2,
+    authorUsername: 'admin',
+    authorNickname: 'Admin',
+    authorRole: 'ADMIN',
+    content: '<script>alert(1)</script>',
+    createdAt: '2026-08-07T03:00:00Z',
+  },
+];
 
 function mountApp() {
   return mount(App, { global: { plugins: [ElementPlus] } });
@@ -75,6 +97,9 @@ function mockApi(currentUser: unknown = null, orders: unknown[] = []) {
     if (url === '/api/work-orders' && method === 'POST') return okResponse(workOrder);
     if (url === '/api/work-orders/10' && method === 'GET') return okResponse(detailOrder);
     if (url === '/api/work-orders/10/logs' && method === 'GET') return okResponse(operationLogs);
+    if (url === '/api/work-orders/10/comments' && method === 'GET') return okResponse(comments);
+    if (url === '/api/work-orders/10/comments' && method === 'POST') return okResponse({ ...comments[0], id: 3, content: '新评论' });
+    if (url === '/api/work-orders/10/comments/1' && method === 'DELETE') return noContent();
     if (url === '/api/work-orders/10' && method === 'PUT') return okResponse(workOrder);
     if (url === '/api/work-orders/10/cancel' && method === 'POST') return okResponse({ ...workOrder, status: '已取消' });
     if (url.startsWith('/api/work-orders') && method === 'GET') return currentUser ? okResponse(paged(orders)) : okResponse({ message: '请先登录' }, 401);
@@ -220,6 +245,84 @@ describe('App', () => {
     expect(wrapper.text()).toContain('admin');
   });
 
+  it('loads and safely renders work order comments on the detail page', async () => {
+    const wrapper = await mountWithApi(user, [workOrder]);
+    await wrapper.find('.work-order-item').trigger('click');
+    await flushPromises();
+
+    const commentsCall = vi.mocked(globalThis.fetch).mock.calls.find(([url, init]) => url.toString() === '/api/work-orders/10/comments' && (init?.method || 'GET') === 'GET');
+    expect(commentsCall).toBeTruthy();
+    expect(wrapper.text()).toContain('工单评论');
+    expect(wrapper.text()).toContain('普通评论');
+    expect(wrapper.text()).toContain('<script>alert(1)</script>');
+    expect(wrapper.html()).not.toContain('<script>alert(1)</script>');
+    expect(wrapper.html()).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+  });
+
+  it('adds a non-empty comment and refreshes comments and operation logs', async () => {
+    const wrapper = await mountWithApi(user, [workOrder]);
+    await wrapper.find('.work-order-item').trigger('click');
+    await flushPromises();
+
+    const commentForm = wrapper.find('.comment-form');
+    await commentForm.find('textarea').setValue('新评论');
+    await commentForm.trigger('submit');
+    await flushPromises();
+
+    const createCommentCall = vi.mocked(globalThis.fetch).mock.calls.find(([url, init]) => url.toString() === '/api/work-orders/10/comments' && init?.method === 'POST');
+    expect(createCommentCall).toBeTruthy();
+    expect(JSON.parse(createCommentCall![1]!.body as string)).toEqual({ content: '新评论' });
+    const commentListCalls = vi.mocked(globalThis.fetch).mock.calls.filter(([url, init]) => url.toString() === '/api/work-orders/10/comments' && (init?.method || 'GET') === 'GET');
+    const logCalls = vi.mocked(globalThis.fetch).mock.calls.filter(([url, init]) => url.toString() === '/api/work-orders/10/logs' && (init?.method || 'GET') === 'GET');
+    expect(commentListCalls.length).toBeGreaterThanOrEqual(2);
+    expect(logCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('rejects blank comments in the UI', async () => {
+    const wrapper = await mountWithApi(user, [workOrder]);
+    await wrapper.find('.work-order-item').trigger('click');
+    await flushPromises();
+
+    await wrapper.find('.comment-form').trigger('submit');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('评论内容不能为空');
+    const createCommentCall = vi.mocked(globalThis.fetch).mock.calls.find(([url, init]) => url.toString() === '/api/work-orders/10/comments' && init?.method === 'POST');
+    expect(createCommentCall).toBeFalsy();
+  });
+
+  it('lets admins delete comments but hides delete actions from regular users', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({ action: 'confirm' } as never);
+
+    const userWrapper = await mountWithApi(user, [workOrder]);
+    await userWrapper.find('.work-order-item').trigger('click');
+    await flushPromises();
+    expect(userWrapper.findAll('.comment-item button').map((button) => button.text())).not.toContain('删除');
+    userWrapper.unmount();
+
+    vi.restoreAllMocks();
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({ action: 'confirm' } as never);
+    const adminWrapper = await mountWithApi(admin, [workOrder]);
+    await adminWrapper.find('.work-order-item').trigger('click');
+    await flushPromises();
+    await adminWrapper.find('.comment-item button').trigger('click');
+    await flushPromises();
+
+    const deleteCommentCall = vi.mocked(globalThis.fetch).mock.calls.find(([url, init]) => url.toString() === '/api/work-orders/10/comments/1' && init?.method === 'DELETE');
+    expect(deleteCommentCall).toBeTruthy();
+    expect(adminWrapper.text()).toContain('评论已删除');
+  });
+
+  it('does not show the comment form for cancelled work orders', async () => {
+    const cancelledOrder = { ...workOrder, status: '已取消' };
+    const wrapper = await mountWithApi(user, [cancelledOrder]);
+    await wrapper.find('.work-order-item').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.find('.comment-form').exists()).toBe(false);
+    expect(wrapper.text()).toContain('已取消工单不能继续评论');
+  });
+
   it('only shows actions for a manageable pending work order', async () => {
     const otherOrder = { ...workOrder, creatorId: 99, creatorUsername: 'other' };
     const completedOrder = { ...workOrder, status: '已完成' };
@@ -310,6 +413,7 @@ describe('App', () => {
       if (url === '/api/auth/me') return okResponse(user);
       if (url === '/api/work-orders/10' && method === 'GET') return okResponse(workOrder);
       if (url === '/api/work-orders/10/logs' && method === 'GET') return okResponse(operationLogs);
+      if (url === '/api/work-orders/10/comments' && method === 'GET') return okResponse(comments);
       if (url.startsWith('/api/work-orders') && method === 'GET') return okResponse(paged([workOrder]));
       if (url === '/api/work-orders/10' && method === 'PUT') {
         return okResponse({ ...workOrder, title: '新标题', description: '新描述', type: '账号问题' });

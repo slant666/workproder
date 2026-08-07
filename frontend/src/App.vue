@@ -15,12 +15,16 @@ import { checkBackend, checkDatabase, type HealthStatus } from './api/health';
 import {
   cancelWorkOrder,
   confirmWorkOrder,
+  createWorkOrderComment,
   createWorkOrder,
+  deleteWorkOrderComment,
+  fetchWorkOrderComments,
   fetchWorkOrderDetail,
   fetchWorkOrderLogs,
   fetchWorkOrders,
   updateWorkOrder,
   type WorkOrder,
+  type WorkOrderComment,
   type WorkOrderOperationLog,
 } from './api/workOrders';
 import {
@@ -54,6 +58,7 @@ const profileForm = reactive({ nickname: '' });
 const passwordForm = reactive({ currentPassword: '', newPassword: '', confirmPassword: '' });
 const workOrderForm = reactive({ title: '', description: '', type: '', priority: '中' as Priority });
 const editWorkOrderForm = reactive({ title: '', description: '', type: '', priority: '中' as Priority });
+const commentForm = reactive({ content: '' });
 const workOrderFilters = reactive({
   keyword: '',
   status: '',
@@ -87,6 +92,7 @@ const adminWorkOrderPageSize = ref(10);
 const adminWorkOrderTotalPages = ref(0);
 const selectedWorkOrder = ref<WorkOrder | null>(null);
 const operationLogs = ref<WorkOrderOperationLog[]>([]);
+const workOrderComments = ref<WorkOrderComment[]>([]);
 const registerError = ref('');
 const loginError = ref('');
 const successMessage = ref('');
@@ -103,7 +109,9 @@ const isDetailLoading = ref(false);
 const isAdminWorkOrdersLoading = ref(false);
 const isAdminHandlersLoading = ref(false);
 const isOperationLogsLoading = ref(false);
+const isCommentsLoading = ref(false);
 const isWorkOrderActionSubmitting = ref(false);
+const isCommentSubmitting = ref(false);
 const isEditingWorkOrder = ref(false);
 const workOrdersLoaded = ref(false);
 const adminLoaded = ref(false);
@@ -138,6 +146,10 @@ const canConfirmSelectedWorkOrder = computed(() => {
 const canCancelSelectedWorkOrder = computed(() => {
   const workOrder = selectedWorkOrder.value;
   return Boolean(workOrder && currentUser.value && workOrder.status === '待处理' && workOrder.creatorId === currentUser.value.id);
+});
+const canCommentSelectedWorkOrder = computed(() => {
+  const workOrder = selectedWorkOrder.value;
+  return Boolean(workOrder && currentUser.value && workOrder.status !== '已取消');
 });
 const pageTitle = computed(() => {
   if (currentView.value === 'admin') return '管理页面';
@@ -187,6 +199,14 @@ function operationFieldLabel(fieldName?: string | null) {
 
 function operationActor(log: WorkOrderOperationLog) {
   return log.actorNickname ? `${log.actorNickname}\uff08${log.actorUsername}\uff09` : log.actorUsername;
+}
+
+function roleLabel(role: string) {
+  const labels: Record<string, string> = {
+    ADMIN: '\u7ba1\u7406\u5458',
+    USER: '\u7528\u6237',
+  };
+  return labels[role] || role;
 }
 
 function operationChangeText(log: WorkOrderOperationLog) {
@@ -273,6 +293,8 @@ async function openWorkOrders(options: { resetPage?: boolean } = {}) {
   adminError.value = '';
   selectedWorkOrder.value = null;
   operationLogs.value = [];
+  workOrderComments.value = [];
+  commentForm.content = '';
   isEditingWorkOrder.value = false;
   try {
     const response = await fetchWorkOrders({
@@ -402,11 +424,13 @@ async function openWorkOrderDetail(id: number) {
   workOrderError.value = '';
   selectedWorkOrder.value = null;
   operationLogs.value = [];
+  workOrderComments.value = [];
+  commentForm.content = '';
   isEditingWorkOrder.value = false;
   try {
     selectedWorkOrder.value = await fetchWorkOrderDetail(id);
     assignmentForm.handlerId = selectedWorkOrder.value.handlerId ?? undefined;
-    await loadOperationLogs(id);
+    await Promise.all([loadOperationLogs(id), loadComments(id)]);
     if (isAdmin.value && adminHandlers.value.length === 0) {
       await loadAdminHandlers();
     }
@@ -427,6 +451,19 @@ async function loadOperationLogs(id = selectedWorkOrder.value?.id) {
     operationLogs.value = [];
   } finally {
     isOperationLogsLoading.value = false;
+  }
+}
+
+async function loadComments(id = selectedWorkOrder.value?.id) {
+  if (!id) return;
+  isCommentsLoading.value = true;
+  try {
+    workOrderComments.value = await fetchWorkOrderComments(id);
+  } catch (error) {
+    detailError.value = error instanceof Error ? error.message : '\u83b7\u53d6\u5de5\u5355\u8bc4\u8bba\u5931\u8d25';
+    workOrderComments.value = [];
+  } finally {
+    isCommentsLoading.value = false;
   }
 }
 
@@ -463,6 +500,55 @@ async function submitHandlerAssignment() {
     detailError.value = error instanceof Error ? error.message : '分配处理人失败';
   } finally {
     isWorkOrderActionSubmitting.value = false;
+  }
+}
+
+async function submitComment() {
+  const workOrder = selectedWorkOrder.value;
+  if (!workOrder || !canCommentSelectedWorkOrder.value) return;
+  const content = commentForm.content.trim();
+  detailError.value = '';
+  workOrderMessage.value = '';
+  if (!content) {
+    detailError.value = '\u8bc4\u8bba\u5185\u5bb9\u4e0d\u80fd\u4e3a\u7a7a';
+    return;
+  }
+  isCommentSubmitting.value = true;
+  try {
+    await createWorkOrderComment(workOrder.id, { content });
+    commentForm.content = '';
+    await Promise.all([loadComments(workOrder.id), loadOperationLogs(workOrder.id)]);
+    workOrderMessage.value = '\u8bc4\u8bba\u5df2\u53d1\u5e03';
+  } catch (error) {
+    detailError.value = error instanceof Error ? error.message : '\u6dfb\u52a0\u8bc4\u8bba\u5931\u8d25';
+  } finally {
+    isCommentSubmitting.value = false;
+  }
+}
+
+async function deleteComment(commentId: number) {
+  const workOrder = selectedWorkOrder.value;
+  if (!workOrder || !isAdmin.value) return;
+  try {
+    await ElMessageBox.confirm('\u786e\u5b9a\u5220\u9664\u8fd9\u6761\u8bc4\u8bba\u5417\uff1f', '\u5220\u9664\u8bc4\u8bba', {
+      confirmButtonText: '\u786e\u5b9a',
+      cancelButtonText: '\u8fd4\u56de',
+      type: 'warning',
+    });
+  } catch {
+    return;
+  }
+  detailError.value = '';
+  workOrderMessage.value = '';
+  isCommentSubmitting.value = true;
+  try {
+    await deleteWorkOrderComment(workOrder.id, commentId);
+    await Promise.all([loadComments(workOrder.id), loadOperationLogs(workOrder.id)]);
+    workOrderMessage.value = '\u8bc4\u8bba\u5df2\u5220\u9664';
+  } catch (error) {
+    detailError.value = error instanceof Error ? error.message : '\u5220\u9664\u8bc4\u8bba\u5931\u8d25';
+  } finally {
+    isCommentSubmitting.value = false;
   }
 }
 
@@ -723,6 +809,8 @@ async function logout() {
   workOrders.value = [];
   selectedWorkOrder.value = null;
   operationLogs.value = [];
+  workOrderComments.value = [];
+  commentForm.content = '';
   workOrdersLoaded.value = false;
   adminLoaded.value = false;
   currentView.value = 'login';
@@ -1012,6 +1100,47 @@ onMounted(() => {
                   <div><dt>处理人</dt><dd>{{ selectedWorkOrder.handlerUsername || '未分配' }}</dd></div>
                   <div><dt>创建时间</dt><dd>{{ formatTime(selectedWorkOrder.createdAt) }}</dd></div>
                 </dl>
+                <section class="comment-section" aria-label="工单评论">
+                  <div class="section-header">
+                    <h4>工单评论</h4>
+                  </div>
+                  <p v-if="isCommentsLoading" class="empty-state">评论加载中...</p>
+                  <p v-else-if="workOrderComments.length === 0" class="empty-state">暂无评论</p>
+                  <div v-else class="comment-list">
+                    <article v-for="comment in workOrderComments" :key="comment.id" class="comment-item">
+                      <header class="comment-header">
+                        <div>
+                          <strong>{{ comment.authorNickname || comment.authorUsername }}</strong>
+                          <span class="item-meta">{{ comment.authorUsername }} · {{ roleLabel(comment.authorRole) }} · {{ formatTime(comment.createdAt) }}</span>
+                        </div>
+                        <el-button
+                          v-if="isAdmin"
+                          size="small"
+                          type="danger"
+                          plain
+                          :loading="isCommentSubmitting"
+                          @click="deleteComment(comment.id)"
+                        >删除</el-button>
+                      </header>
+                      <p class="comment-content">{{ comment.content }}</p>
+                    </article>
+                  </div>
+                  <el-form v-if="canCommentSelectedWorkOrder" class="comment-form" label-position="top" @submit.prevent="submitComment">
+                    <el-form-item label="添加评论">
+                      <el-input
+                        v-model="commentForm.content"
+                        type="textarea"
+                        :rows="3"
+                        maxlength="1000"
+                        show-word-limit
+                        placeholder="请输入评论内容"
+                        :disabled="isCommentSubmitting"
+                      />
+                    </el-form-item>
+                    <el-button native-type="submit" type="primary" :loading="isCommentSubmitting">发表评论</el-button>
+                  </el-form>
+                  <p v-else class="empty-state">已取消工单不能继续评论</p>
+                </section>
                 <section class="operation-log-section" aria-label="工单操作记录">
                   <h4>工单操作记录</h4>
                   <p v-if="isOperationLogsLoading" class="empty-state">操作记录加载中...</p>

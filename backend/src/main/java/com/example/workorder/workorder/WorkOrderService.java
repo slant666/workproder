@@ -88,6 +88,74 @@ public class WorkOrderService {
                 id);
     }
 
+    public List<WorkOrderCommentResponse> listVisibleComments(Long id, CurrentUser currentUser) {
+        WorkOrderResponse workOrder = findById(id);
+        requireCanManage(workOrder, currentUser);
+        return jdbcTemplate.query(
+                """
+                SELECT c.id, c.work_order_id, c.author_id, u.username AS author_username,
+                       u.nickname AS author_nickname, u.role AS author_role, c.content, c.created_at
+                FROM work_order_comments c
+                JOIN users u ON u.id = c.author_id
+                WHERE c.work_order_id = ?
+                ORDER BY c.created_at ASC, c.id ASC
+                """,
+                this::mapComment,
+                id);
+    }
+
+    @Transactional
+    public WorkOrderCommentResponse addComment(Long id, CreateWorkOrderCommentRequest request, CurrentUser currentUser) {
+        WorkOrderResponse workOrder = findById(id);
+        requireCanManage(workOrder, currentUser);
+        if (CANCELLED_STATUS.equals(workOrder.status())) {
+            throw new WorkOrderStateException("\u5df2\u53d6\u6d88\u5de5\u5355\u4e0d\u80fd\u7ee7\u7eed\u8bc4\u8bba");
+        }
+        String content = requireText(request == null ? null : request.content(), "\u8bc4\u8bba\u5185\u5bb9\u4e0d\u80fd\u4e3a\u7a7a");
+
+        KeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbcTemplate.update(connection -> {
+            PreparedStatement ps = connection.prepareStatement(
+                    """
+                    INSERT INTO work_order_comments (work_order_id, author_id, content)
+                    VALUES (?, ?, ?)
+                    """,
+                    Statement.RETURN_GENERATED_KEYS);
+            ps.setLong(1, id);
+            ps.setLong(2, currentUser.id());
+            ps.setString(3, content);
+            return ps;
+        }, keyHolder);
+        Number key = generatedId(keyHolder);
+        if (key == null) {
+            throw new WorkOrderException("\u6dfb\u52a0\u8bc4\u8bba\u5931\u8d25");
+        }
+        recordCommentOperation(id, currentUser, "comment_add", key.longValue());
+        return findCommentById(id, key.longValue());
+    }
+
+    @Transactional
+    public void deleteComment(Long id, Long commentId, CurrentUser currentUser) {
+        requireAdmin(currentUser);
+        findById(id);
+        WorkOrderCommentResponse comment = findCommentById(id, commentId);
+        recordOperation(
+                id,
+                currentUser,
+                "comment_delete",
+                "comment",
+                comment.content(),
+                commentId == null ? null : commentId.toString(),
+                "{\"commentId\":" + jsonNumber(commentId) + "}");
+        int deleted = jdbcTemplate.update(
+                "DELETE FROM work_order_comments WHERE id = ? AND work_order_id = ?",
+                commentId,
+                id);
+        if (deleted != 1) {
+            throw new WorkOrderException("\u5220\u9664\u8bc4\u8bba\u5931\u8d25");
+        }
+    }
+
     @Transactional
     public WorkOrderResponse assignHandler(Long id, AssignWorkOrderRequest request, CurrentUser admin) {
         if (admin == null || !Role.ADMIN.name().equals(admin.role())) {
@@ -452,6 +520,36 @@ public class WorkOrderService {
                 rs.getString("new_value"),
                 rs.getString("details_json"),
                 rs.getTimestamp("created_at").toInstant());
+    }
+
+    private WorkOrderCommentResponse mapComment(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
+        return new WorkOrderCommentResponse(
+                rs.getLong("id"),
+                rs.getLong("work_order_id"),
+                rs.getLong("author_id"),
+                rs.getString("author_username"),
+                rs.getString("author_nickname"),
+                rs.getString("author_role"),
+                rs.getString("content"),
+                rs.getTimestamp("created_at").toInstant());
+    }
+
+    private WorkOrderCommentResponse findCommentById(Long workOrderId, Long commentId) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    """
+                    SELECT c.id, c.work_order_id, c.author_id, u.username AS author_username,
+                           u.nickname AS author_nickname, u.role AS author_role, c.content, c.created_at
+                    FROM work_order_comments c
+                    JOIN users u ON u.id = c.author_id
+                    WHERE c.work_order_id = ? AND c.id = ?
+                    """,
+                    this::mapComment,
+                    workOrderId,
+                    commentId);
+        } catch (EmptyResultDataAccessException ex) {
+            throw new WorkOrderException("\u8bc4\u8bba\u4e0d\u5b58\u5728");
+        }
     }
 
     private Number generatedId(KeyHolder keyHolder) {
