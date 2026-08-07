@@ -68,4 +68,22 @@ public class AdminController {
         var admin = permissionService.requireAdmin(session);
         return workOrderService.assignHandler(id, request, admin);
     }
+
+    @PutMapping("/work-orders/{id}/accept")
+    public WorkOrderResponse acceptWorkOrder(@PathVariable Long id, HttpSession session) {
+        var admin = permissionService.requireAdmin(session);
+        return workOrderService.accept(id, admin);
+    }
+
+    @PutMapping("/work-orders/{id}/submit")
+    public WorkOrderResponse submitWorkOrder(@PathVariable Long id, HttpSession session) {
+        var admin = permissionService.requireAdmin(session);
+        return workOrderService.submitForConfirmation(id, admin);
+    }
+
+    @PutMapping("/work-orders/{id}/return")
+    public WorkOrderResponse returnWorkOrder(@PathVariable Long id, HttpSession session) {
+        var admin = permissionService.requireAdmin(session);
+        return workOrderService.returnToProcessing(id, admin);
+    }
 }

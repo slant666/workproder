@@ -124,11 +124,47 @@ class AdminControllerTests {
         assertThat(workOrderService.assignRequest).isNull();
     }
 
+    @Test
+    void adminCanRunAdminStateActions() {
+        FakeWorkOrderService workOrderService = new FakeWorkOrderService();
+        AdminController controller = new AdminController(new PermissionService(), workOrderService);
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(1L, "admin", "Admin", "ADMIN"));
+
+        assertThat(controller.acceptWorkOrder(10L, session).status()).isEqualTo("\u5904\u7406\u4e2d");
+        assertThat(controller.submitWorkOrder(10L, session).status()).isEqualTo("\u5f85\u786e\u8ba4");
+        assertThat(controller.returnWorkOrder(10L, session).status()).isEqualTo("\u5904\u7406\u4e2d");
+        assertThat(workOrderService.acceptedId).isEqualTo(10L);
+        assertThat(workOrderService.submittedId).isEqualTo(10L);
+        assertThat(workOrderService.returnedId).isEqualTo(10L);
+    }
+
+    @Test
+    void userCannotRunAdminStateActions() {
+        FakeWorkOrderService workOrderService = new FakeWorkOrderService();
+        AdminController controller = new AdminController(new PermissionService(), workOrderService);
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(2L, "demo", "Demo", "USER"));
+
+        assertThatThrownBy(() -> controller.acceptWorkOrder(10L, session))
+                .isInstanceOf(ForbiddenException.class);
+        assertThatThrownBy(() -> controller.submitWorkOrder(10L, session))
+                .isInstanceOf(ForbiddenException.class);
+        assertThatThrownBy(() -> controller.returnWorkOrder(10L, session))
+                .isInstanceOf(ForbiddenException.class);
+        assertThat(workOrderService.acceptedId).isNull();
+        assertThat(workOrderService.submittedId).isNull();
+        assertThat(workOrderService.returnedId).isNull();
+    }
+
     private static class FakeWorkOrderService extends WorkOrderService {
         private WorkOrderListQuery query;
         private Long assignedWorkOrderId;
         private AssignWorkOrderRequest assignRequest;
         private CurrentUser assigningAdmin;
+        private Long acceptedId;
+        private Long submittedId;
+        private Long returnedId;
 
         FakeWorkOrderService() {
             super(null);
@@ -157,6 +193,30 @@ class AdminControllerTests {
             return new WorkOrderResponse(
                     id, "Printer", "Description", "Device", "\u9ad8", "\u5f85\u5904\u7406",
                     2L, "creator", request.handlerId(), "handler", Instant.parse("2026-08-07T00:00:00Z"));
+        }
+
+        @Override
+        public WorkOrderResponse accept(Long id, CurrentUser admin) {
+            acceptedId = id;
+            return responseWithStatus(id, "\u5904\u7406\u4e2d");
+        }
+
+        @Override
+        public WorkOrderResponse submitForConfirmation(Long id, CurrentUser admin) {
+            submittedId = id;
+            return responseWithStatus(id, "\u5f85\u786e\u8ba4");
+        }
+
+        @Override
+        public WorkOrderResponse returnToProcessing(Long id, CurrentUser admin) {
+            returnedId = id;
+            return responseWithStatus(id, "\u5904\u7406\u4e2d");
+        }
+
+        private WorkOrderResponse responseWithStatus(Long id, String status) {
+            return new WorkOrderResponse(
+                    id, "Printer", "Description", "Device", "\u9ad8", status,
+                    2L, "creator", 3L, "handler", Instant.parse("2026-08-07T00:00:00Z"));
         }
     }
 }

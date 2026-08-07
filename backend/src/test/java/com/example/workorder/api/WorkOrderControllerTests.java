@@ -101,6 +101,19 @@ class WorkOrderControllerTests {
         assertThat(response.status()).isEqualTo(CANCELLED);
     }
 
+    @Test
+    void confirmsWorkOrderForCurrentSessionUser() {
+        FakeWorkOrderService workOrderService = new FakeWorkOrderService();
+        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        MockHttpSession session = session(new CurrentUser(7L, "demo", "Demo", "USER"));
+
+        WorkOrderResponse response = controller.confirm(10L, session);
+
+        assertThat(workOrderService.confirmedId).isEqualTo(10L);
+        assertThat(workOrderService.visibleUser.id()).isEqualTo(7L);
+        assertThat(response.status()).isEqualTo("\u5df2\u5b8c\u6210");
+    }
+
     private MockHttpSession session(CurrentUser user) {
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, user);
@@ -113,6 +126,7 @@ class WorkOrderControllerTests {
         private Long detailId;
         private Long updatedId;
         private Long cancelledId;
+        private Long confirmedId;
         private UpdateWorkOrderRequest updateRequest;
         private WorkOrderListQuery query;
 
@@ -153,6 +167,13 @@ class WorkOrderControllerTests {
             cancelledId = id;
             visibleUser = currentUser;
             return response("Printer issue", 1L, "demo", CANCELLED);
+        }
+
+        @Override
+        public WorkOrderResponse confirmCompletion(Long id, CurrentUser currentUser) {
+            confirmedId = id;
+            visibleUser = currentUser;
+            return response("Printer issue", 1L, "demo", "\u5df2\u5b8c\u6210");
         }
 
         private WorkOrderResponse response(String title, Long creatorId, String creatorUsername) {

@@ -25,10 +25,13 @@ import org.springframework.transaction.annotation.Transactional;
 public class WorkOrderService {
 
     private static final String INITIAL_STATUS = "\u5f85\u5904\u7406";
+    private static final String PROCESSING_STATUS = "\u5904\u7406\u4e2d";
+    private static final String WAITING_CONFIRMATION_STATUS = "\u5f85\u786e\u8ba4";
     private static final String CANCELLED_STATUS = "\u5df2\u53d6\u6d88";
     private static final String COMPLETED_STATUS = "\u5df2\u5b8c\u6210";
     private static final Set<String> ALLOWED_PRIORITIES = Set.of("\u4f4e", "\u4e2d", "\u9ad8");
-    private static final Set<String> ALLOWED_STATUSES = Set.of(INITIAL_STATUS, CANCELLED_STATUS, COMPLETED_STATUS);
+    private static final Set<String> ALLOWED_STATUSES = Set.of(
+            INITIAL_STATUS, PROCESSING_STATUS, WAITING_CONFIRMATION_STATUS, COMPLETED_STATUS, CANCELLED_STATUS);
     private static final int DEFAULT_PAGE = 1;
     private static final int DEFAULT_PAGE_SIZE = 10;
     private static final int MAX_PAGE_SIZE = 50;
@@ -186,16 +189,55 @@ public class WorkOrderService {
 
     public WorkOrderResponse cancel(Long id, CurrentUser currentUser) {
         WorkOrderResponse existing = findById(id);
-        requireCanManage(existing, currentUser);
-        requirePending(existing);
+        requireCreator(existing, currentUser);
 
-        int updated = jdbcTemplate.update(
-                "UPDATE work_orders SET status = ? WHERE id = ? AND status = ?",
-                CANCELLED_STATUS,
-                id,
-                INITIAL_STATUS);
-        requireUpdated(updated, id);
-        return findById(id);
+        return transitionStatus(existing, INITIAL_STATUS, CANCELLED_STATUS, currentUser, "cancel");
+    }
+
+    @Transactional
+    public WorkOrderResponse accept(Long id, CurrentUser admin) {
+        requireAdmin(admin);
+        WorkOrderResponse existing = findById(id);
+        if (existing.handlerId() != null && !existing.handlerId().equals(admin.id())) {
+            throw new ForbiddenException();
+        }
+        if (existing.handlerId() == null) {
+            jdbcTemplate.update("UPDATE work_orders SET handler_id = ? WHERE id = ?", admin.id(), id);
+            jdbcTemplate.update(
+                    """
+                    INSERT INTO work_order_assignments (work_order_id, old_handler_id, new_handler_id, assigned_by)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    id,
+                    null,
+                    admin.id(),
+                    admin.id());
+            existing = findById(id);
+        }
+        return transitionStatus(existing, INITIAL_STATUS, PROCESSING_STATUS, admin, "accept");
+    }
+
+    @Transactional
+    public WorkOrderResponse submitForConfirmation(Long id, CurrentUser admin) {
+        requireAdmin(admin);
+        WorkOrderResponse existing = findById(id);
+        requireHandler(existing, admin);
+        return transitionStatus(existing, PROCESSING_STATUS, WAITING_CONFIRMATION_STATUS, admin, "submit");
+    }
+
+    @Transactional
+    public WorkOrderResponse returnToProcessing(Long id, CurrentUser admin) {
+        requireAdmin(admin);
+        WorkOrderResponse existing = findById(id);
+        requireHandler(existing, admin);
+        return transitionStatus(existing, WAITING_CONFIRMATION_STATUS, PROCESSING_STATUS, admin, "return");
+    }
+
+    @Transactional
+    public WorkOrderResponse confirmCompletion(Long id, CurrentUser currentUser) {
+        WorkOrderResponse existing = findById(id);
+        requireCreator(existing, currentUser);
+        return transitionStatus(existing, WAITING_CONFIRMATION_STATUS, COMPLETED_STATUS, currentUser, "confirm");
     }
 
     private WorkOrderResponse findById(Long id) {
@@ -376,6 +418,24 @@ public class WorkOrderService {
         }
     }
 
+    private void requireAdmin(CurrentUser currentUser) {
+        if (currentUser == null || !Role.ADMIN.name().equals(currentUser.role())) {
+            throw new ForbiddenException();
+        }
+    }
+
+    private void requireCreator(WorkOrderResponse workOrder, CurrentUser currentUser) {
+        if (currentUser == null || !workOrder.creatorId().equals(currentUser.id())) {
+            throw new ForbiddenException();
+        }
+    }
+
+    private void requireHandler(WorkOrderResponse workOrder, CurrentUser admin) {
+        if (workOrder.handlerId() == null || !workOrder.handlerId().equals(admin.id())) {
+            throw new ForbiddenException();
+        }
+    }
+
     private void requirePending(WorkOrderResponse workOrder) {
         if (!INITIAL_STATUS.equals(workOrder.status())) {
             throw new WorkOrderStateException("\u53ea\u6709\u5f85\u5904\u7406\u5de5\u5355\u53ef\u4ee5\u4fee\u6539\u6216\u53d6\u6d88");
@@ -383,9 +443,39 @@ public class WorkOrderService {
     }
 
     private void requireAssignable(WorkOrderResponse workOrder) {
-        if (CANCELLED_STATUS.equals(workOrder.status()) || COMPLETED_STATUS.equals(workOrder.status())) {
+        if (!INITIAL_STATUS.equals(workOrder.status())) {
             throw new WorkOrderStateException("\u5df2\u5b8c\u6210\u6216\u5df2\u53d6\u6d88\u5de5\u5355\u4e0d\u80fd\u91cd\u65b0\u5206\u914d");
         }
+    }
+
+    private WorkOrderResponse transitionStatus(
+            WorkOrderResponse existing,
+            String expectedStatus,
+            String nextStatus,
+            CurrentUser actor,
+            String action) {
+        if (!expectedStatus.equals(existing.status())) {
+            throw new WorkOrderStateException("\u5de5\u5355\u72b6\u6001\u4e0d\u5141\u8bb8\u6267\u884c\u8be5\u64cd\u4f5c");
+        }
+        int updated = jdbcTemplate.update(
+                "UPDATE work_orders SET status = ? WHERE id = ? AND status = ?",
+                nextStatus,
+                existing.id(),
+                expectedStatus);
+        if (updated != 1) {
+            throw new WorkOrderStateException("\u5de5\u5355\u72b6\u6001\u4e0d\u5141\u8bb8\u6267\u884c\u8be5\u64cd\u4f5c");
+        }
+        jdbcTemplate.update(
+                """
+                INSERT INTO work_order_status_transitions (work_order_id, old_status, new_status, actor_id, action)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                existing.id(),
+                expectedStatus,
+                nextStatus,
+                actor.id(),
+                action);
+        return findById(existing.id());
     }
 
     private void requireEnabledAdminHandler(Long handlerId) {

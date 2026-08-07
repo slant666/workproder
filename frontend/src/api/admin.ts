@@ -104,3 +104,31 @@ export async function assignWorkOrderHandler(id: number, handlerId: number): Pro
 
   return response.json() as Promise<WorkOrder>;
 }
+
+async function updateAdminWorkOrderState(id: number, action: 'accept' | 'submit' | 'return', fallback: string): Promise<WorkOrder> {
+  const response = await fetch(`/api/admin/work-orders/${id}/${action}`, { method: 'PUT' });
+
+  if (response.status === 401) {
+    throw new Error('\u8bf7\u5148\u767b\u5f55');
+  }
+  if (response.status === 403) {
+    throw new Error(await readAdminError(response, 'Access denied'));
+  }
+  if (!response.ok) {
+    throw new Error(await readAdminError(response, fallback));
+  }
+
+  return response.json() as Promise<WorkOrder>;
+}
+
+export function acceptWorkOrder(id: number): Promise<WorkOrder> {
+  return updateAdminWorkOrderState(id, 'accept', '\u63a5\u5355\u5931\u8d25');
+}
+
+export function submitWorkOrderForConfirmation(id: number): Promise<WorkOrder> {
+  return updateAdminWorkOrderState(id, 'submit', '\u63d0\u4ea4\u786e\u8ba4\u5931\u8d25');
+}
+
+export function returnWorkOrderToProcessing(id: number): Promise<WorkOrder> {
+  return updateAdminWorkOrderState(id, 'return', '\u9000\u56de\u5904\u7406\u4e2d\u5931\u8d25');
+}
