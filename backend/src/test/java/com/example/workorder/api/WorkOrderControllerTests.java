@@ -9,6 +9,7 @@ import com.example.workorder.workorder.CreateWorkOrderRequest;
 import com.example.workorder.workorder.PagedWorkOrderResponse;
 import com.example.workorder.workorder.UpdateWorkOrderRequest;
 import com.example.workorder.workorder.WorkOrderListQuery;
+import com.example.workorder.workorder.WorkOrderOperationLogResponse;
 import com.example.workorder.workorder.WorkOrderResponse;
 import com.example.workorder.workorder.WorkOrderService;
 import java.time.Instant;
@@ -74,6 +75,19 @@ class WorkOrderControllerTests {
     }
 
     @Test
+    void loadsOperationLogsForCurrentSessionUser() {
+        FakeWorkOrderService workOrderService = new FakeWorkOrderService();
+        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        MockHttpSession session = session(new CurrentUser(3L, "admin", "Admin", "ADMIN"));
+
+        List<WorkOrderOperationLogResponse> response = controller.logs(10L, session);
+
+        assertThat(workOrderService.logDetailId).isEqualTo(10L);
+        assertThat(workOrderService.visibleUser.id()).isEqualTo(3L);
+        assertThat(response).extracting(WorkOrderOperationLogResponse::action).containsExactly("create");
+    }
+
+    @Test
     void updatesWorkOrderForCurrentSessionUser() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
         WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
@@ -124,6 +138,7 @@ class WorkOrderControllerTests {
         private CurrentUser visibleUser;
         private CurrentUser creator;
         private Long detailId;
+        private Long logDetailId;
         private Long updatedId;
         private Long cancelledId;
         private Long confirmedId;
@@ -152,6 +167,24 @@ class WorkOrderControllerTests {
             detailId = id;
             visibleUser = currentUser;
             return response("Printer issue", 1L, "demo");
+        }
+
+        @Override
+        public List<WorkOrderOperationLogResponse> listVisibleOperationLogs(Long id, CurrentUser currentUser) {
+            logDetailId = id;
+            visibleUser = currentUser;
+            return List.of(new WorkOrderOperationLogResponse(
+                    1L,
+                    id,
+                    currentUser.id(),
+                    currentUser.username(),
+                    currentUser.nickname(),
+                    "create",
+                    null,
+                    null,
+                    "Printer issue",
+                    null,
+                    Instant.parse("2026-08-07T00:00:00Z")));
         }
 
         @Override

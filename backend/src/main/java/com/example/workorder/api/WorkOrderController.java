@@ -6,9 +6,11 @@ import com.example.workorder.workorder.CreateWorkOrderRequest;
 import com.example.workorder.workorder.PagedWorkOrderResponse;
 import com.example.workorder.workorder.UpdateWorkOrderRequest;
 import com.example.workorder.workorder.WorkOrderListQuery;
+import com.example.workorder.workorder.WorkOrderOperationLogResponse;
 import com.example.workorder.workorder.WorkOrderResponse;
 import com.example.workorder.workorder.WorkOrderService;
 import jakarta.servlet.http.HttpSession;
+import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -53,6 +55,12 @@ public class WorkOrderController {
     public WorkOrderResponse detail(@PathVariable Long id, HttpSession session) {
         CurrentUser user = permissionService.requireUser(session);
         return workOrderService.getVisibleDetail(id, user);
+    }
+
+    @GetMapping("/{id}/logs")
+    public List<WorkOrderOperationLogResponse> logs(@PathVariable Long id, HttpSession session) {
+        CurrentUser user = permissionService.requireUser(session);
+        return workOrderService.listVisibleOperationLogs(id, user);
     }
 
     @PutMapping("/{id}")

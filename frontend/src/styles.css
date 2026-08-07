@@ -265,6 +265,36 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.operation-log-section {
+  margin: 18px 0 22px;
+  padding-top: 18px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.operation-log-section h4 {
+  margin: 0 0 14px;
+  color: #111827;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.operation-timeline {
+  margin-top: 4px;
+}
+
+.operation-actor {
+  margin-left: 8px;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.operation-change {
+  margin: 6px 0 0;
+  color: #374151;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
 .detail-actions {
   display: flex;
   flex-wrap: wrap;

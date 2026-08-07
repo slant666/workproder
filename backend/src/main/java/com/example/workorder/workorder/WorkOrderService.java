@@ -72,6 +72,22 @@ public class WorkOrderService {
                 Role.ADMIN.name());
     }
 
+    public List<WorkOrderOperationLogResponse> listVisibleOperationLogs(Long id, CurrentUser currentUser) {
+        WorkOrderResponse workOrder = findById(id);
+        requireCanManage(workOrder, currentUser);
+        return jdbcTemplate.query(
+                """
+                SELECT l.id, l.work_order_id, l.actor_id, u.username AS actor_username, u.nickname AS actor_nickname,
+                       l.action, l.field_name, l.old_value, l.new_value, l.details_json, l.created_at
+                FROM work_order_operation_logs l
+                JOIN users u ON u.id = l.actor_id
+                WHERE l.work_order_id = ?
+                ORDER BY l.created_at ASC, l.id ASC
+                """,
+                this::mapOperationLog,
+                id);
+    }
+
     @Transactional
     public WorkOrderResponse assignHandler(Long id, AssignWorkOrderRequest request, CurrentUser admin) {
         if (admin == null || !Role.ADMIN.name().equals(admin.role())) {
@@ -98,6 +114,14 @@ public class WorkOrderService {
                 existing.handlerId(),
                 request.handlerId(),
                 admin.id());
+        recordOperation(
+                id,
+                admin,
+                "assign_handler",
+                "handler",
+                existing.handlerUsername(),
+                usernameById(request.handlerId()),
+                handlerDetails(existing.handlerId(), existing.handlerUsername(), request.handlerId()));
         return findById(id);
     }
 
@@ -119,6 +143,7 @@ public class WorkOrderService {
         return new PagedWorkOrderResponse(items, total, normalized.page(), normalized.pageSize(), totalPages);
     }
 
+    @Transactional
     public WorkOrderResponse create(CreateWorkOrderRequest request, CurrentUser creator) {
         String title = requireText(request.title(), "\u6807\u9898\u4e0d\u80fd\u4e3a\u7a7a");
         String description = requireText(request.description(), "\u8be6\u7ec6\u63cf\u8ff0\u4e0d\u80fd\u4e3a\u7a7a");
@@ -149,6 +174,7 @@ public class WorkOrderService {
         if (key == null) {
             throw new WorkOrderException("\u521b\u5efa\u5de5\u5355\u5931\u8d25");
         }
+        recordOperation(key.longValue(), creator, "create", null, null, title, null);
         return getVisibleDetail(key.longValue(), creator);
     }
 
@@ -158,6 +184,7 @@ public class WorkOrderService {
         return response;
     }
 
+    @Transactional
     public WorkOrderResponse update(Long id, UpdateWorkOrderRequest request, CurrentUser currentUser) {
         WorkOrderResponse existing = findById(id);
         requireCanManage(existing, currentUser);
@@ -184,6 +211,10 @@ public class WorkOrderService {
                 id,
                 INITIAL_STATUS);
         requireUpdated(updated, id);
+        recordFieldChange(id, currentUser, "title", existing.title(), title);
+        recordFieldChange(id, currentUser, "description", existing.description(), description);
+        recordFieldChange(id, currentUser, "type", existing.type(), type);
+        recordFieldChange(id, currentUser, "priority", existing.priority(), priority);
         return findById(id);
     }
 
@@ -212,6 +243,14 @@ public class WorkOrderService {
                     null,
                     admin.id(),
                     admin.id());
+            recordOperation(
+                    id,
+                    admin,
+                    "assign_handler",
+                    "handler",
+                    null,
+                    admin.username(),
+                    handlerDetails(null, null, admin.id()));
             existing = findById(id);
         }
         return transitionStatus(existing, INITIAL_STATUS, PROCESSING_STATUS, admin, "accept");
@@ -400,6 +439,21 @@ public class WorkOrderService {
                 rs.getTimestamp("created_at").toInstant());
     }
 
+    private WorkOrderOperationLogResponse mapOperationLog(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
+        return new WorkOrderOperationLogResponse(
+                rs.getLong("id"),
+                rs.getLong("work_order_id"),
+                rs.getLong("actor_id"),
+                rs.getString("actor_username"),
+                rs.getString("actor_nickname"),
+                rs.getString("action"),
+                rs.getString("field_name"),
+                rs.getString("old_value"),
+                rs.getString("new_value"),
+                rs.getString("details_json"),
+                rs.getTimestamp("created_at").toInstant());
+    }
+
     private Number generatedId(KeyHolder keyHolder) {
         if (keyHolder.getKeyList().size() == 1 && keyHolder.getKeyList().getFirst().size() == 1) {
             return keyHolder.getKey();
@@ -475,7 +529,77 @@ public class WorkOrderService {
                 nextStatus,
                 actor.id(),
                 action);
+        recordOperation(existing.id(), actor, action, "status", expectedStatus, nextStatus, null);
         return findById(existing.id());
+    }
+
+    public void recordCommentOperation(Long workOrderId, CurrentUser actor, String action, Long commentId) {
+        recordOperation(workOrderId, actor, action, "comment", null, commentId == null ? null : commentId.toString(), null);
+    }
+
+    public void recordAttachmentOperation(Long workOrderId, CurrentUser actor, String action, String filename) {
+        recordOperation(workOrderId, actor, action, "attachment", null, filename, null);
+    }
+
+    private void recordFieldChange(
+            Long workOrderId,
+            CurrentUser actor,
+            String fieldName,
+            String oldValue,
+            String newValue) {
+        if (oldValue == null ? newValue == null : oldValue.equals(newValue)) {
+            return;
+        }
+        recordOperation(workOrderId, actor, "update", fieldName, oldValue, newValue, null);
+    }
+
+    private void recordOperation(
+            Long workOrderId,
+            CurrentUser actor,
+            String action,
+            String fieldName,
+            String oldValue,
+            String newValue,
+            String detailsJson) {
+        jdbcTemplate.update(
+                """
+                INSERT INTO work_order_operation_logs
+                    (work_order_id, actor_id, action, field_name, old_value, new_value, details_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                workOrderId,
+                actor.id(),
+                action,
+                fieldName,
+                oldValue,
+                newValue,
+                detailsJson);
+    }
+
+    private String usernameById(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        return jdbcTemplate.queryForObject("SELECT username FROM users WHERE id = ?", String.class, userId);
+    }
+
+    private String handlerDetails(Long oldHandlerId, String oldHandlerUsername, Long newHandlerId) {
+        return "{\"oldHandlerId\":" + jsonNumber(oldHandlerId)
+                + ",\"oldHandlerUsername\":" + jsonString(oldHandlerUsername)
+                + ",\"newHandlerId\":" + jsonNumber(newHandlerId)
+                + ",\"newHandlerUsername\":" + jsonString(usernameById(newHandlerId))
+                + "}";
+    }
+
+    private String jsonNumber(Long value) {
+        return value == null ? "null" : value.toString();
+    }
+
+    private String jsonString(String value) {
+        if (value == null) {
+            return "null";
+        }
+        return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 
     private void requireEnabledAdminHandler(Long handlerId) {

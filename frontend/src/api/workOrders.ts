@@ -12,6 +12,20 @@ export interface WorkOrder {
   createdAt: string;
 }
 
+export interface WorkOrderOperationLog {
+  id: number;
+  workOrderId: number;
+  actorId: number;
+  actorUsername: string;
+  actorNickname: string;
+  action: string;
+  fieldName?: string | null;
+  oldValue?: string | null;
+  newValue?: string | null;
+  detailsJson?: string | null;
+  createdAt: string;
+}
+
 export interface CreateWorkOrderRequest {
   title: string;
   description: string;
@@ -75,6 +89,12 @@ export async function fetchWorkOrderDetail(id: number): Promise<WorkOrder> {
   const response = await fetch(`/api/work-orders/${id}`);
   await readWorkOrderResponse(response, '\u83b7\u53d6\u5de5\u5355\u8be6\u60c5\u5931\u8d25');
   return response.json() as Promise<WorkOrder>;
+}
+
+export async function fetchWorkOrderLogs(id: number): Promise<WorkOrderOperationLog[]> {
+  const response = await fetch(`/api/work-orders/${id}/logs`);
+  await readWorkOrderResponse(response, '\u83b7\u53d6\u5de5\u5355\u65e5\u5fd7\u5931\u8d25');
+  return response.json() as Promise<WorkOrderOperationLog[]>;
 }
 
 export async function createWorkOrder(request: CreateWorkOrderRequest): Promise<WorkOrder> {
