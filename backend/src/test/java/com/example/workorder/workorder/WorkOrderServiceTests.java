@@ -19,6 +19,7 @@ class WorkOrderServiceTests {
     void setUp() {
         DriverManagerDataSource dataSource = new DriverManagerDataSource("jdbc:h2:mem:workorders;MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         jdbcTemplate = new JdbcTemplate(dataSource);
+        jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_status_transitions");
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_assignments");
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_orders");
         jdbcTemplate.execute("DROP TABLE IF EXISTS users");
@@ -53,6 +54,17 @@ class WorkOrderServiceTests {
                     old_handler_id BIGINT NULL,
                     new_handler_id BIGINT NOT NULL,
                     assigned_by BIGINT NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE work_order_status_transitions (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    work_order_id BIGINT NOT NULL,
+                    old_status VARCHAR(20) NOT NULL,
+                    new_status VARCHAR(20) NOT NULL,
+                    actor_id BIGINT NOT NULL,
+                    action VARCHAR(40) NOT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """);
@@ -297,13 +309,110 @@ class WorkOrderServiceTests {
     }
 
     @Test
-    void adminCancelsOthersPendingWorkOrderButCannotCancelCompletedWorkOrder() {
+    void adminCannotCancelOthersWorkOrder() {
         CurrentUser admin = new CurrentUser(3L, "admin", "管理员", "ADMIN");
 
-        assertThat(workOrderService.cancel(2L, admin).status()).isEqualTo("已取消");
+        assertThatThrownBy(() -> workOrderService.cancel(2L, admin))
+                .isInstanceOf(ForbiddenException.class);
         assertThatThrownBy(() -> workOrderService.cancel(4L, admin))
+                .isInstanceOf(ForbiddenException.class);
+    }
+    @Test
+    void supportsLegalStatusTransitionsAndRecordsHistory() {
+        CurrentUser creator = new CurrentUser(1L, "demo", "Demo", "USER");
+        CurrentUser handler = new CurrentUser(4L, "handler", "Handler", "ADMIN");
+
+        WorkOrderResponse accepted = workOrderService.accept(1L, handler);
+        WorkOrderResponse submitted = workOrderService.submitForConfirmation(1L, handler);
+        WorkOrderResponse returned = workOrderService.returnToProcessing(1L, handler);
+        WorkOrderResponse resubmitted = workOrderService.submitForConfirmation(1L, handler);
+        WorkOrderResponse completed = workOrderService.confirmCompletion(1L, creator);
+
+        assertThat(accepted.status()).isEqualTo("\u5904\u7406\u4e2d");
+        assertThat(accepted.handlerId()).isEqualTo(4L);
+        assertThat(submitted.status()).isEqualTo("\u5f85\u786e\u8ba4");
+        assertThat(returned.status()).isEqualTo("\u5904\u7406\u4e2d");
+        assertThat(resubmitted.status()).isEqualTo("\u5f85\u786e\u8ba4");
+        assertThat(completed.status()).isEqualTo("\u5df2\u5b8c\u6210");
+        assertThat(jdbcTemplate.queryForList(
+                "SELECT action FROM work_order_status_transitions WHERE work_order_id = ? ORDER BY id",
+                String.class,
+                1L))
+                .containsExactly("accept", "submit", "return", "submit", "confirm");
+    }
+
+    @Test
+    void rejectsIllegalStatusTransitions() {
+        CurrentUser creator = new CurrentUser(1L, "demo", "Demo", "USER");
+        CurrentUser handler = new CurrentUser(4L, "handler", "Handler", "ADMIN");
+
+        assertThatThrownBy(() -> workOrderService.submitForConfirmation(1L, handler))
+                .isInstanceOf(ForbiddenException.class);
+        assertThatThrownBy(() -> workOrderService.confirmCompletion(1L, creator))
+                .isInstanceOf(WorkOrderStateException.class);
+        assertThatThrownBy(() -> workOrderService.returnToProcessing(1L, handler))
+                .isInstanceOf(ForbiddenException.class);
+
+        workOrderService.accept(1L, handler);
+        assertThatThrownBy(() -> workOrderService.cancel(1L, creator))
+                .isInstanceOf(WorkOrderStateException.class);
+        assertThatThrownBy(() -> workOrderService.confirmCompletion(1L, creator))
+                .isInstanceOf(WorkOrderStateException.class);
+
+        workOrderService.submitForConfirmation(1L, handler);
+        assertThatThrownBy(() -> workOrderService.cancel(1L, creator))
+                .isInstanceOf(WorkOrderStateException.class);
+
+        workOrderService.confirmCompletion(1L, creator);
+        assertThatThrownBy(() -> workOrderService.accept(1L, handler))
+                .isInstanceOf(WorkOrderStateException.class);
+        assertThatThrownBy(() -> workOrderService.submitForConfirmation(1L, handler))
+                .isInstanceOf(WorkOrderStateException.class);
+        assertThatThrownBy(() -> workOrderService.returnToProcessing(1L, handler))
+                .isInstanceOf(WorkOrderStateException.class);
+        assertThatThrownBy(() -> workOrderService.cancel(1L, creator))
                 .isInstanceOf(WorkOrderStateException.class);
     }
+
+    @Test
+    void enforcesRoleSpecificStatusActions() {
+        CurrentUser creator = new CurrentUser(1L, "demo", "Demo", "USER");
+        CurrentUser other = new CurrentUser(2L, "other", "Other", "USER");
+        CurrentUser admin = new CurrentUser(3L, "admin", "Admin", "ADMIN");
+        CurrentUser handler = new CurrentUser(4L, "handler", "Handler", "ADMIN");
+
+        assertThatThrownBy(() -> workOrderService.accept(1L, creator))
+                .isInstanceOf(ForbiddenException.class);
+        assertThatThrownBy(() -> workOrderService.cancel(1L, admin))
+                .isInstanceOf(ForbiddenException.class);
+        assertThatThrownBy(() -> workOrderService.cancel(1L, other))
+                .isInstanceOf(ForbiddenException.class);
+
+        workOrderService.accept(1L, handler);
+        assertThatThrownBy(() -> workOrderService.submitForConfirmation(1L, admin))
+                .isInstanceOf(ForbiddenException.class);
+        workOrderService.submitForConfirmation(1L, handler);
+        assertThatThrownBy(() -> workOrderService.confirmCompletion(1L, other))
+                .isInstanceOf(ForbiddenException.class);
+        assertThatThrownBy(() -> workOrderService.confirmCompletion(1L, admin))
+                .isInstanceOf(ForbiddenException.class);
+        assertThatThrownBy(() -> workOrderService.returnToProcessing(1L, admin))
+                .isInstanceOf(ForbiddenException.class);
+    }
+
+    @Test
+    void terminalStatusesCannotTransition() {
+        CurrentUser creator = new CurrentUser(1L, "demo", "Demo", "USER");
+        CurrentUser handler = new CurrentUser(4L, "handler", "Handler", "ADMIN");
+
+        assertThatThrownBy(() -> workOrderService.accept(3L, handler))
+                .isInstanceOf(WorkOrderStateException.class);
+        assertThatThrownBy(() -> workOrderService.accept(4L, handler))
+                .isInstanceOf(WorkOrderStateException.class);
+        assertThatThrownBy(() -> workOrderService.confirmCompletion(4L, creator))
+                .isInstanceOf(WorkOrderStateException.class);
+    }
+
     @Test
     void listsOnlyEnabledAdminHandlers() {
         assertThat(workOrderService.listEnabledAdminHandlers())

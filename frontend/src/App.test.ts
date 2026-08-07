@@ -53,6 +53,10 @@ function mockApi(currentUser: unknown = null, orders: unknown[] = []) {
     if (url === '/api/admin/handlers') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse(handlers) : okResponse({ message: 'Access denied' }, 403);
     if (url.startsWith('/api/admin/work-orders') && method === 'GET') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse(paged(orders)) : okResponse({ message: 'Access denied' }, 403);
     if (url === '/api/admin/work-orders/10/handler' && method === 'PUT') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse({ ...workOrder, handlerId: 3, handlerUsername: 'handler' }) : okResponse({ message: 'Access denied' }, 403);
+    if (url === '/api/admin/work-orders/10/accept' && method === 'PUT') return okResponse({ ...workOrder, status: '处理中', handlerId: 2, handlerUsername: 'admin' });
+    if (url === '/api/admin/work-orders/10/submit' && method === 'PUT') return okResponse({ ...workOrder, status: '待确认', handlerId: 2, handlerUsername: 'admin' });
+    if (url === '/api/admin/work-orders/10/return' && method === 'PUT') return okResponse({ ...workOrder, status: '处理中', handlerId: 2, handlerUsername: 'admin' });
+    if (url === '/api/work-orders/10/confirm' && method === 'POST') return okResponse({ ...workOrder, status: '已完成' });
     if (url === '/api/auth/logout' && method === 'POST') return noContent();
     return Promise.reject(new Error(`Unexpected request: ${method} ${url}`));
   });
@@ -174,7 +178,7 @@ describe('App', () => {
   });
 
   it('only shows actions for a manageable pending work order', async () => {
-    const otherOrder = { ...workOrder, creatorId: 2, creatorUsername: 'other' };
+    const otherOrder = { ...workOrder, creatorId: 99, creatorUsername: 'other' };
     const completedOrder = { ...workOrder, status: '已完成' };
 
     const userWrapper = await mountWithApi(user, [otherOrder]);
@@ -198,8 +202,41 @@ describe('App', () => {
     await adminWrapper.find('.work-order-item').trigger('click');
     await flushPromises();
     expect(adminWrapper.findAll('button').map((button) => button.text())).toContain('修改');
-    expect(adminWrapper.findAll('button').map((button) => button.text())).toContain('取消工单');
+    expect(adminWrapper.findAll('button').map((button) => button.text())).not.toContain('取消工单');
     expect(adminWrapper.findAll('button').map((button) => button.text())).toContain('确认分配');
+  });
+
+  it('runs allowed status actions from the detail page', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({ action: 'confirm' } as never);
+    const wrapper = await mountWithApi(admin, [workOrder]);
+    await wrapper.find('.work-order-item').trigger('click');
+    await flushPromises();
+
+    await wrapper.findAll('button').find((button) => button.text() === '接单')!.trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).toContain('接单成功');
+    expect(wrapper.text()).toContain('状态处理中');
+
+    await wrapper.findAll('button').find((button) => button.text() === '处理完成')!.trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).toContain('已提交确认');
+    expect(wrapper.text()).toContain('状态待确认');
+  });
+
+  it('lets the creator confirm a waiting work order', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({ action: 'confirm' } as never);
+    const waitingOrder = { ...workOrder, status: '待确认', handlerId: 2, handlerUsername: 'admin' };
+    const wrapper = await mountWithApi(user, [waitingOrder]);
+    await wrapper.find('.work-order-item').trigger('click');
+    await flushPromises();
+
+    await wrapper.findAll('button').find((button) => button.text() === '确认完成')!.trigger('click');
+    await flushPromises();
+
+    const confirmCall = vi.mocked(globalThis.fetch).mock.calls.find(([url, init]) => url.toString() === '/api/work-orders/10/confirm' && init?.method === 'POST');
+    expect(confirmCall).toBeTruthy();
+    expect(wrapper.text()).toContain('工单已完成');
+    expect(wrapper.text()).toContain('状态已完成');
   });
 
   it('assigns a pending work order handler after confirmation', async () => {

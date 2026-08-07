@@ -1,10 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessageBox } from 'element-plus';
-import { assignWorkOrderHandler, fetchAdminHandlers, fetchAdminOverview, fetchAdminWorkOrders, type AdminHandler } from './api/admin';
+import {
+  acceptWorkOrder,
+  assignWorkOrderHandler,
+  fetchAdminHandlers,
+  fetchAdminOverview,
+  fetchAdminWorkOrders,
+  returnWorkOrderToProcessing,
+  submitWorkOrderForConfirmation,
+  type AdminHandler,
+} from './api/admin';
 import { checkBackend, checkDatabase, type HealthStatus } from './api/health';
 import {
   cancelWorkOrder,
+  confirmWorkOrder,
   createWorkOrder,
   fetchWorkOrderDetail,
   fetchWorkOrders,
@@ -105,6 +115,26 @@ const canAssignSelectedWorkOrder = computed(() => {
   return Boolean(workOrder && isAdmin.value && workOrder.status === '待处理');
 });
 const selectedAssignmentHandler = computed(() => adminHandlers.value.find((handler) => handler.id === assignmentForm.handlerId));
+const canAcceptSelectedWorkOrder = computed(() => {
+  const workOrder = selectedWorkOrder.value;
+  return Boolean(workOrder && isAdmin.value && workOrder.status === '待处理' && (!workOrder.handlerId || workOrder.handlerId === currentUser.value?.id));
+});
+const canSubmitSelectedWorkOrder = computed(() => {
+  const workOrder = selectedWorkOrder.value;
+  return Boolean(workOrder && isAdmin.value && workOrder.status === '处理中' && workOrder.handlerId === currentUser.value?.id);
+});
+const canReturnSelectedWorkOrder = computed(() => {
+  const workOrder = selectedWorkOrder.value;
+  return Boolean(workOrder && isAdmin.value && workOrder.status === '待确认' && workOrder.handlerId === currentUser.value?.id);
+});
+const canConfirmSelectedWorkOrder = computed(() => {
+  const workOrder = selectedWorkOrder.value;
+  return Boolean(workOrder && currentUser.value && workOrder.status === '待确认' && workOrder.creatorId === currentUser.value.id);
+});
+const canCancelSelectedWorkOrder = computed(() => {
+  const workOrder = selectedWorkOrder.value;
+  return Boolean(workOrder && currentUser.value && workOrder.status === '待处理' && workOrder.creatorId === currentUser.value.id);
+});
 const pageTitle = computed(() => {
   if (currentView.value === 'admin') return '管理页面';
   if (currentView.value === 'profile') return '个人资料';
@@ -361,16 +391,78 @@ async function submitHandlerAssignment() {
   isWorkOrderActionSubmitting.value = true;
   try {
     const updated = await assignWorkOrderHandler(workOrder.id, assignmentForm.handlerId);
-    selectedWorkOrder.value = updated;
-    assignmentForm.handlerId = updated.handlerId ?? undefined;
-    adminWorkOrders.value = adminWorkOrders.value.map((item) => (item.id === updated.id ? updated : item));
-    workOrders.value = workOrders.value.map((item) => (item.id === updated.id ? updated : item));
+    applyUpdatedWorkOrder(updated);
     workOrderMessage.value = '处理人分配成功';
   } catch (error) {
     detailError.value = error instanceof Error ? error.message : '分配处理人失败';
   } finally {
     isWorkOrderActionSubmitting.value = false;
   }
+}
+
+function applyUpdatedWorkOrder(updated: WorkOrder) {
+  selectedWorkOrder.value = updated;
+  assignmentForm.handlerId = updated.handlerId ?? undefined;
+  adminWorkOrders.value = adminWorkOrders.value.map((item) => (item.id === updated.id ? updated : item));
+  workOrders.value = workOrders.value.map((item) => (item.id === updated.id ? updated : item));
+}
+
+async function runStateAction(
+  confirmMessage: string,
+  confirmTitle: string,
+  success: string,
+  action: () => Promise<WorkOrder>,
+) {
+  try {
+    await ElMessageBox.confirm(confirmMessage, confirmTitle, {
+      confirmButtonText: '确定',
+      cancelButtonText: '返回',
+      type: 'warning',
+    });
+  } catch {
+    return;
+  }
+
+  detailError.value = '';
+  workOrderMessage.value = '';
+  isWorkOrderActionSubmitting.value = true;
+  try {
+    applyUpdatedWorkOrder(await action());
+    isEditingWorkOrder.value = false;
+    workOrderMessage.value = success;
+  } catch (error) {
+    detailError.value = error instanceof Error ? error.message : success.replace('成功', '失败');
+  } finally {
+    isWorkOrderActionSubmitting.value = false;
+  }
+}
+
+function submitAcceptWorkOrder() {
+  const workOrder = selectedWorkOrder.value;
+  if (!workOrder || !canAcceptSelectedWorkOrder.value) return;
+  void runStateAction(`确定接单「${workOrder.title}」吗？`, '管理员接单', '接单成功', () => acceptWorkOrder(workOrder.id));
+}
+
+function submitProcessingComplete() {
+  const workOrder = selectedWorkOrder.value;
+  if (!workOrder || !canSubmitSelectedWorkOrder.value) return;
+  void runStateAction(`确定将「${workOrder.title}」提交给创建人确认吗？`, '处理完成', '已提交确认', () =>
+    submitWorkOrderForConfirmation(workOrder.id),
+  );
+}
+
+function submitReturnToProcessing() {
+  const workOrder = selectedWorkOrder.value;
+  if (!workOrder || !canReturnSelectedWorkOrder.value) return;
+  void runStateAction(`确定将「${workOrder.title}」退回处理中吗？`, '退回处理中', '已退回处理中', () =>
+    returnWorkOrderToProcessing(workOrder.id),
+  );
+}
+
+function submitCompletionConfirmation() {
+  const workOrder = selectedWorkOrder.value;
+  if (!workOrder || !canConfirmSelectedWorkOrder.value) return;
+  void runStateAction(`确定确认「${workOrder.title}」已完成吗？`, '确认完成', '工单已完成', () => confirmWorkOrder(workOrder.id));
 }
 
 async function submitWorkOrder() {
@@ -459,7 +551,7 @@ async function submitWorkOrderEdit() {
 
 async function submitWorkOrderCancellation() {
   const workOrder = selectedWorkOrder.value;
-  if (!workOrder || !canManageSelectedWorkOrder.value) return;
+  if (!workOrder || !canCancelSelectedWorkOrder.value) return;
   try {
     await ElMessageBox.confirm('取消后将不能再修改该工单，确定继续吗？', '取消工单', {
       confirmButtonText: '确定取消',
@@ -474,7 +566,7 @@ async function submitWorkOrderCancellation() {
   workOrderMessage.value = '';
   isWorkOrderActionSubmitting.value = true;
   try {
-    selectedWorkOrder.value = await cancelWorkOrder(workOrder.id);
+    applyUpdatedWorkOrder(await cancelWorkOrder(workOrder.id));
     isEditingWorkOrder.value = false;
     workOrderMessage.value = '工单已取消';
   } catch (error) {
@@ -679,6 +771,8 @@ onMounted(() => {
                 <el-form-item label="&#29366;&#24577;">
                   <el-select v-model="adminWorkOrderFilters.status" clearable placeholder="&#20840;&#37096;&#29366;&#24577;" @change="applyAdminWorkOrderFilters">
                     <el-option label="&#24453;&#22788;&#29702;" value="&#24453;&#22788;&#29702;" />
+                    <el-option label="&#22788;&#29702;&#20013;" value="&#22788;&#29702;&#20013;" />
+                    <el-option label="&#24453;&#30830;&#35748;" value="&#24453;&#30830;&#35748;" />
                     <el-option label="&#24050;&#21462;&#28040;" value="&#24050;&#21462;&#28040;" />
                     <el-option label="&#24050;&#23436;&#25104;" value="&#24050;&#23436;&#25104;" />
                   </el-select>
@@ -749,6 +843,8 @@ onMounted(() => {
                 <el-form-item label="&#29366;&#24577;">
                   <el-select v-model="workOrderFilters.status" clearable placeholder="&#20840;&#37096;&#29366;&#24577;" @change="applyWorkOrderFilters">
                     <el-option label="&#24453;&#22788;&#29702;" value="&#24453;&#22788;&#29702;" />
+                    <el-option label="&#22788;&#29702;&#20013;" value="&#22788;&#29702;&#20013;" />
+                    <el-option label="&#24453;&#30830;&#35748;" value="&#24453;&#30830;&#35748;" />
                     <el-option label="&#24050;&#21462;&#28040;" value="&#24050;&#21462;&#28040;" />
                     <el-option label="&#24050;&#23436;&#25104;" value="&#24050;&#23436;&#25104;" />
                   </el-select>
@@ -869,9 +965,32 @@ onMounted(() => {
                 </el-form>
                 <div class="detail-actions">
                   <el-button @click="openWorkOrders">返回工单</el-button>
+                  <el-button
+                    v-if="canAcceptSelectedWorkOrder"
+                    type="primary"
+                    :loading="isWorkOrderActionSubmitting"
+                    @click="submitAcceptWorkOrder"
+                  >接单</el-button>
+                  <el-button
+                    v-if="canSubmitSelectedWorkOrder"
+                    type="primary"
+                    :loading="isWorkOrderActionSubmitting"
+                    @click="submitProcessingComplete"
+                  >处理完成</el-button>
+                  <el-button
+                    v-if="canReturnSelectedWorkOrder"
+                    :loading="isWorkOrderActionSubmitting"
+                    @click="submitReturnToProcessing"
+                  >退回处理中</el-button>
+                  <el-button
+                    v-if="canConfirmSelectedWorkOrder"
+                    type="success"
+                    :loading="isWorkOrderActionSubmitting"
+                    @click="submitCompletionConfirmation"
+                  >确认完成</el-button>
                   <el-button v-if="canManageSelectedWorkOrder" type="primary" @click="startEditingWorkOrder">修改</el-button>
                   <el-button
-                    v-if="canManageSelectedWorkOrder"
+                    v-if="canCancelSelectedWorkOrder"
                     type="danger"
                     :loading="isWorkOrderActionSubmitting"
                     @click="submitWorkOrderCancellation"

@@ -69,4 +69,10 @@ public class WorkOrderController {
         CurrentUser user = permissionService.requireUser(session);
         return workOrderService.cancel(id, user);
     }
+
+    @PostMapping("/{id}/confirm")
+    public WorkOrderResponse confirm(@PathVariable Long id, HttpSession session) {
+        CurrentUser user = permissionService.requireUser(session);
+        return workOrderService.confirmCompletion(id, user);
+    }
 }

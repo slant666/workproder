@@ -2,50 +2,60 @@
 
 ## Current Task
 
-T013: 分配工单处理人。
+T014: 工单状态流转。
 
 ## Status
 
-Complete. No required steps remain for T013.
+Complete. No required steps remain for T014.
 
 ## Completed Work
 
-- Created branch `codex/t013-assign-work-order-handler`.
-- Added administrator-only handler candidate endpoint `GET /api/admin/handlers`.
-- Added administrator-only assignment endpoint `PUT /api/admin/work-orders/{id}/handler`.
-- Added `AssignWorkOrderRequest` and `AdminHandlerResponse`.
-- Enforced assignment rules in `WorkOrderService`:
-  - Assigning actor must be an admin.
-  - Handler ID must be valid.
-  - Handler must exist, be enabled, and have role `ADMIN`.
-  - Regular users and disabled admins cannot become handlers.
-  - Completed or cancelled work orders cannot be reassigned.
-  - Pending work orders support first assignment and reassignment.
-- Added `work_order_assignments` migration table recording `old_handler_id`, `new_handler_id`, `assigned_by`, and `created_at`.
-- Added admin detail UI for explicit handler selection and confirmation before assignment.
-- Updated frontend admin API helpers for handler list and assignment.
-- Added backend controller/service tests for permission and illegal assignment paths.
-- Added frontend test coverage for admin assignment confirmation and regular-user visibility.
+- Created branch `codex/t014-work-order-state-flow` from updated `main`.
+- Expanded work order statuses to:
+  - `待处理`
+  - `处理中`
+  - `待确认`
+  - `已完成`
+  - `已取消`
+- Added backend state transition endpoints:
+  - `PUT /api/admin/work-orders/{id}/accept`
+  - `PUT /api/admin/work-orders/{id}/submit`
+  - `PUT /api/admin/work-orders/{id}/return`
+  - `POST /api/work-orders/{id}/confirm`
+- Kept `POST /api/work-orders/{id}/cancel`, now restricted to the creator and only from `待处理`.
+- Added backend state machine rules:
+  - Admin handler accepts: `待处理 -> 处理中`
+  - Handler submits completion: `处理中 -> 待确认`
+  - Creator confirms: `待确认 -> 已完成`
+  - Creator cancels: `待处理 -> 已取消`
+  - Handler returns: `待确认 -> 处理中`
+  - `已完成` and `已取消` reject further transitions.
+- Admin accept auto-assigns the work order to the current admin when no handler exists and records assignment history.
+- Added `work_order_status_transitions` migration table to record status history.
+- Updated frontend status filters to include all five statuses.
+- Added frontend detail actions for accept, submit, return, confirm, and creator-only cancel.
+- Added backend tests for legal transitions, illegal transitions, role restrictions, terminal states, and controller routing.
+- Added frontend tests for state action buttons and creator confirmation.
 
 ## Changed Files
 
 - `backend/src/main/java/com/example/workorder/api/AdminController.java`
-- `backend/src/main/java/com/example/workorder/workorder/AdminHandlerResponse.java`
-- `backend/src/main/java/com/example/workorder/workorder/AssignWorkOrderRequest.java`
+- `backend/src/main/java/com/example/workorder/api/WorkOrderController.java`
 - `backend/src/main/java/com/example/workorder/workorder/WorkOrderService.java`
-- `backend/src/main/resources/db/migration/V6__create_work_order_assignments.sql`
+- `backend/src/main/resources/db/migration/V7__create_work_order_status_transitions.sql`
 - `backend/src/test/java/com/example/workorder/api/AdminControllerTests.java`
+- `backend/src/test/java/com/example/workorder/api/WorkOrderControllerTests.java`
 - `backend/src/test/java/com/example/workorder/workorder/WorkOrderServiceTests.java`
 - `frontend/src/App.vue`
 - `frontend/src/App.test.ts`
 - `frontend/src/api/admin.ts`
-- `frontend/src/styles.css`
+- `frontend/src/api/workOrders.ts`
 - `PROGRESS.md`
 
 ## Verification
 
-- `backend`: `mvn.cmd test` passed, 62 tests.
-- `frontend`: `npm.cmd run test` passed, 18 tests.
+- `backend`: `mvn.cmd test` passed, 69 tests.
+- `frontend`: `npm.cmd run test` passed, 20 tests.
 - `frontend`: `npm.cmd run build` passed.
 
 ## Notes

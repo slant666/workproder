@@ -102,3 +102,9 @@ export async function cancelWorkOrder(id: number): Promise<WorkOrder> {
   await readWorkOrderResponse(response, '\u53d6\u6d88\u5de5\u5355\u5931\u8d25');
   return response.json() as Promise<WorkOrder>;
 }
+
+export async function confirmWorkOrder(id: number): Promise<WorkOrder> {
+  const response = await fetch(`/api/work-orders/${id}/confirm`, { method: 'POST' });
+  await readWorkOrderResponse(response, '\u786e\u8ba4\u5b8c\u6210\u5931\u8d25');
+  return response.json() as Promise<WorkOrder>;
+}
