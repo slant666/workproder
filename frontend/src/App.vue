@@ -18,12 +18,16 @@ import {
   createWorkOrderComment,
   createWorkOrder,
   deleteWorkOrderComment,
+  fetchWorkOrderAttachments,
   fetchWorkOrderComments,
   fetchWorkOrderDetail,
   fetchWorkOrderLogs,
   fetchWorkOrders,
   updateWorkOrder,
+  uploadWorkOrderAttachment,
+  workOrderAttachmentDownloadUrl,
   type WorkOrder,
+  type WorkOrderAttachment,
   type WorkOrderComment,
   type WorkOrderOperationLog,
 } from './api/workOrders';
@@ -93,6 +97,7 @@ const adminWorkOrderTotalPages = ref(0);
 const selectedWorkOrder = ref<WorkOrder | null>(null);
 const operationLogs = ref<WorkOrderOperationLog[]>([]);
 const workOrderComments = ref<WorkOrderComment[]>([]);
+const workOrderAttachments = ref<WorkOrderAttachment[]>([]);
 const registerError = ref('');
 const loginError = ref('');
 const successMessage = ref('');
@@ -110,8 +115,10 @@ const isAdminWorkOrdersLoading = ref(false);
 const isAdminHandlersLoading = ref(false);
 const isOperationLogsLoading = ref(false);
 const isCommentsLoading = ref(false);
+const isAttachmentsLoading = ref(false);
 const isWorkOrderActionSubmitting = ref(false);
 const isCommentSubmitting = ref(false);
+const isAttachmentSubmitting = ref(false);
 const isEditingWorkOrder = ref(false);
 const workOrdersLoaded = ref(false);
 const adminLoaded = ref(false);
@@ -162,6 +169,12 @@ function formatTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value || '无创建时间';
   return date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function formatFileSize(size: number) {
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
+  if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${size} B`;
 }
 
 function operationActionLabel(action: string) {
@@ -294,6 +307,7 @@ async function openWorkOrders(options: { resetPage?: boolean } = {}) {
   selectedWorkOrder.value = null;
   operationLogs.value = [];
   workOrderComments.value = [];
+  workOrderAttachments.value = [];
   commentForm.content = '';
   isEditingWorkOrder.value = false;
   try {
@@ -425,12 +439,13 @@ async function openWorkOrderDetail(id: number) {
   selectedWorkOrder.value = null;
   operationLogs.value = [];
   workOrderComments.value = [];
+  workOrderAttachments.value = [];
   commentForm.content = '';
   isEditingWorkOrder.value = false;
   try {
     selectedWorkOrder.value = await fetchWorkOrderDetail(id);
     assignmentForm.handlerId = selectedWorkOrder.value.handlerId ?? undefined;
-    await Promise.all([loadOperationLogs(id), loadComments(id)]);
+    await Promise.all([loadOperationLogs(id), loadComments(id), loadAttachments(id)]);
     if (isAdmin.value && adminHandlers.value.length === 0) {
       await loadAdminHandlers();
     }
@@ -464,6 +479,19 @@ async function loadComments(id = selectedWorkOrder.value?.id) {
     workOrderComments.value = [];
   } finally {
     isCommentsLoading.value = false;
+  }
+}
+
+async function loadAttachments(id = selectedWorkOrder.value?.id) {
+  if (!id) return;
+  isAttachmentsLoading.value = true;
+  try {
+    workOrderAttachments.value = await fetchWorkOrderAttachments(id);
+  } catch (error) {
+    detailError.value = error instanceof Error ? error.message : '\u83b7\u53d6\u5de5\u5355\u9644\u4ef6\u5931\u8d25';
+    workOrderAttachments.value = [];
+  } finally {
+    isAttachmentsLoading.value = false;
   }
 }
 
@@ -549,6 +577,26 @@ async function deleteComment(commentId: number) {
     detailError.value = error instanceof Error ? error.message : '\u5220\u9664\u8bc4\u8bba\u5931\u8d25';
   } finally {
     isCommentSubmitting.value = false;
+  }
+}
+
+async function submitAttachment(event: Event) {
+  const workOrder = selectedWorkOrder.value;
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!workOrder || !file) return;
+  detailError.value = '';
+  workOrderMessage.value = '';
+  isAttachmentSubmitting.value = true;
+  try {
+    await uploadWorkOrderAttachment(workOrder.id, file);
+    await Promise.all([loadAttachments(workOrder.id), loadOperationLogs(workOrder.id)]);
+    workOrderMessage.value = '\u9644\u4ef6\u5df2\u4e0a\u4f20';
+  } catch (error) {
+    detailError.value = error instanceof Error ? error.message : '\u4e0a\u4f20\u9644\u4ef6\u5931\u8d25';
+  } finally {
+    isAttachmentSubmitting.value = false;
   }
 }
 
@@ -810,6 +858,7 @@ async function logout() {
   selectedWorkOrder.value = null;
   operationLogs.value = [];
   workOrderComments.value = [];
+  workOrderAttachments.value = [];
   commentForm.content = '';
   workOrdersLoaded.value = false;
   adminLoaded.value = false;
@@ -1100,6 +1149,39 @@ onMounted(() => {
                   <div><dt>处理人</dt><dd>{{ selectedWorkOrder.handlerUsername || '未分配' }}</dd></div>
                   <div><dt>创建时间</dt><dd>{{ formatTime(selectedWorkOrder.createdAt) }}</dd></div>
                 </dl>
+                <section class="attachment-section" aria-label="工单附件">
+                  <div class="section-header">
+                    <h4>工单附件</h4>
+                    <label class="file-upload-button">
+                      <input
+                        type="file"
+                        accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,image/jpeg,image/png,image/gif,image/webp,application/pdf"
+                        :disabled="isAttachmentSubmitting"
+                        @change="submitAttachment"
+                      />
+                      <span>{{ isAttachmentSubmitting ? '上传中' : '上传附件' }}</span>
+                    </label>
+                  </div>
+                  <p v-if="isAttachmentsLoading" class="empty-state">附件加载中...</p>
+                  <p v-else-if="workOrderAttachments.length === 0" class="empty-state">暂无附件</p>
+                  <div v-else class="attachment-list">
+                    <article v-for="attachment in workOrderAttachments" :key="attachment.id" class="attachment-item">
+                      <div>
+                        <strong>{{ attachment.originalFilename }}</strong>
+                        <span class="item-meta">
+                          {{ formatFileSize(attachment.fileSize) }} ·
+                          {{ attachment.uploaderNickname || attachment.uploaderUsername }} ·
+                          {{ formatTime(attachment.createdAt) }}
+                        </span>
+                      </div>
+                      <el-button
+                        tag="a"
+                        size="small"
+                        :href="workOrderAttachmentDownloadUrl(selectedWorkOrder.id, attachment.id)"
+                      >下载</el-button>
+                    </article>
+                  </div>
+                </section>
                 <section class="comment-section" aria-label="工单评论">
                   <div class="section-header">
                     <h4>工单评论</h4>

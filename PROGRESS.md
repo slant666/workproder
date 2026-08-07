@@ -2,62 +2,70 @@
 
 ## Current Task
 
-T016: Work order comments
+T017: Work order attachments
 
 ## Status
 
-Complete. No required steps remain for T016.
+Complete. No required steps remain for T017.
 
 ## Branch
 
-- `codex/t016-work-order-comments`
+- `codex/t017-work-order-attachments`
 
 ## Completed Work
 
-- Added backend comment table:
-  - `work_order_comments`
-  - stores work order id, author id, content, and created time.
-- Added backend DTOs:
-  - `CreateWorkOrderCommentRequest`
-  - `WorkOrderCommentResponse`
-- Added comment endpoints:
-  - `GET /api/work-orders/{id}/comments`
-  - `POST /api/work-orders/{id}/comments`
-  - `DELETE /api/work-orders/{id}/comments/{commentId}`
-- Enforced T016 business rules:
-  - only users who can view a work order can list or add comments;
-  - comment content is trimmed and cannot be blank;
-  - comments include author username, nickname, role, and creation time;
-  - comments are ordered by `created_at ASC, id ASC`;
-  - no update endpoint was added;
-  - only admins can delete comments;
-  - cancelled work orders reject new comments;
-  - comment add/delete operations write operation logs.
+- Added backend attachment persistence:
+  - `work_order_attachments`
+  - stores work order id, uploader id, original filename, random stored filename, content type, file size, and creation time.
+- Added attachment configuration:
+  - `app.attachments.upload-dir`
+  - `app.attachments.max-size-bytes`
+  - Spring multipart max file/request size.
+- Added backend attachment DTOs and service:
+  - `WorkOrderAttachmentResponse`
+  - `WorkOrderAttachmentDownload`
+  - `WorkOrderAttachmentProperties`
+  - `WorkOrderAttachmentService`
+- Added attachment endpoints:
+  - `GET /api/work-orders/{id}/attachments`
+  - `POST /api/work-orders/{id}/attachments`
+  - `GET /api/work-orders/{id}/attachments/{attachmentId}/download`
+- Enforced T017 business rules:
+  - only users who can view the work order can list/upload/download attachments;
+  - download checks work order permission again;
+  - allowed images, PDF, and common office/text documents;
+  - rejects dangerous extensions and mismatched MIME types;
+  - enforces single-file size limit;
+  - duplicate original filenames do not overwrite existing files;
+  - server stores files under random UUID-based filenames;
+  - upload writes `attachment_add` operation logs;
+  - upload directory is ignored by Git.
 - Updated frontend API:
-  - `WorkOrderComment`
-  - `fetchWorkOrderComments`
-  - `createWorkOrderComment`
-  - `deleteWorkOrderComment`
+  - `WorkOrderAttachment`
+  - `fetchWorkOrderAttachments`
+  - `uploadWorkOrderAttachment`
+  - `workOrderAttachmentDownloadUrl`
 - Updated work order detail page:
-  - loads comments with detail;
-  - displays comments in chronological order;
-  - shows author, role, time, and content;
-  - provides comment form only when the work order is not cancelled;
-  - shows delete buttons only for admins;
-  - refreshes comments and operation logs after add/delete.
-- XSS safety:
-  - frontend renders comment content with Vue text interpolation, not `v-html`, so script text is escaped instead of executed.
-- Added backend and frontend tests for comment behavior.
+  - loads attachments with detail;
+  - displays original filename, size, uploader, and upload time;
+  - supports file upload and download;
+  - refreshes attachments and operation logs after upload.
+- Added backend and frontend tests for attachment behavior.
 
 ## Changed Files
 
+- `.gitignore`
+- `backend/src/main/java/com/example/workorder/WorkOrderSystemApplication.java`
 - `backend/src/main/java/com/example/workorder/api/WorkOrderController.java`
-- `backend/src/main/java/com/example/workorder/workorder/CreateWorkOrderCommentRequest.java`
-- `backend/src/main/java/com/example/workorder/workorder/WorkOrderCommentResponse.java`
+- `backend/src/main/java/com/example/workorder/workorder/WorkOrderAttachmentDownload.java`
+- `backend/src/main/java/com/example/workorder/workorder/WorkOrderAttachmentProperties.java`
+- `backend/src/main/java/com/example/workorder/workorder/WorkOrderAttachmentResponse.java`
+- `backend/src/main/java/com/example/workorder/workorder/WorkOrderAttachmentService.java`
 - `backend/src/main/java/com/example/workorder/workorder/WorkOrderService.java`
-- `backend/src/main/resources/db/migration/V9__create_work_order_comments.sql`
+- `backend/src/main/resources/application.yml`
+- `backend/src/main/resources/db/migration/V10__create_work_order_attachments.sql`
 - `backend/src/test/java/com/example/workorder/api/WorkOrderControllerTests.java`
-- `backend/src/test/java/com/example/workorder/workorder/WorkOrderServiceTests.java`
+- `backend/src/test/java/com/example/workorder/workorder/WorkOrderAttachmentServiceTests.java`
 - `frontend/src/App.test.ts`
 - `frontend/src/App.vue`
 - `frontend/src/api/workOrders.ts`
@@ -66,12 +74,12 @@ Complete. No required steps remain for T016.
 
 ## Verification
 
-- `backend`: `mvn.cmd test` passed, 79 tests.
-- `frontend`: `npm.cmd run test` passed, 26 tests.
+- `backend`: `mvn.cmd test` passed, 83 tests.
+- `frontend`: `npm.cmd run test` passed, 28 tests.
 - `frontend`: `npm.cmd run build` passed.
 - Frontend production build still emits the existing non-blocking Rollup pure-annotation messages from `@vueuse/core`.
 
 ## Notes
 
-- Comment editing is intentionally not implemented for T016.
-- Comment deletion currently hard-deletes the comment row, while the delete action remains in operation logs.
+- Attachment deletion is intentionally not implemented for T017 because it was not in the requested business rules.
+- Office MIME checks allow common browser fallbacks such as `application/octet-stream` for legacy Office files.

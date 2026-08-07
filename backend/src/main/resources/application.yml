@@ -1,6 +1,10 @@
 ﻿spring:
   application:
     name: work-order-system
+  servlet:
+    multipart:
+      max-file-size: ${WORK_ORDER_ATTACHMENT_MAX_FILE_SIZE:10MB}
+      max-request-size: ${WORK_ORDER_ATTACHMENT_MAX_REQUEST_SIZE:10MB}
   datasource:
     url: ${WORK_ORDER_DB_URL:jdbc:mysql://localhost:3306/work_order_system?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
     username: ${WORK_ORDER_DB_USERNAME}
@@ -26,4 +30,7 @@ management:
 app:
   bootstrap:
     admin-token: ${WORK_ORDER_BOOTSTRAP_ADMIN_TOKEN:}
+  attachments:
+    upload-dir: ${WORK_ORDER_ATTACHMENT_DIR:uploads/work-order-attachments}
+    max-size-bytes: ${WORK_ORDER_ATTACHMENT_MAX_SIZE_BYTES:10485760}
 

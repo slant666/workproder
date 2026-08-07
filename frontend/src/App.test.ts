@@ -81,6 +81,19 @@ const comments = [
     createdAt: '2026-08-07T03:00:00Z',
   },
 ];
+const attachments = [
+  {
+    id: 1,
+    workOrderId: 10,
+    uploaderId: 1,
+    uploaderUsername: 'demo',
+    uploaderNickname: 'Demo',
+    originalFilename: 'report.pdf',
+    contentType: 'application/pdf',
+    fileSize: 2048,
+    createdAt: '2026-08-07T04:00:00Z',
+  },
+];
 
 function mountApp() {
   return mount(App, { global: { plugins: [ElementPlus] } });
@@ -99,6 +112,8 @@ function mockApi(currentUser: unknown = null, orders: unknown[] = []) {
     if (url === '/api/work-orders/10/logs' && method === 'GET') return okResponse(operationLogs);
     if (url === '/api/work-orders/10/comments' && method === 'GET') return okResponse(comments);
     if (url === '/api/work-orders/10/comments' && method === 'POST') return okResponse({ ...comments[0], id: 3, content: '新评论' });
+    if (url === '/api/work-orders/10/attachments' && method === 'GET') return okResponse(attachments);
+    if (url === '/api/work-orders/10/attachments' && method === 'POST') return okResponse({ ...attachments[0], id: 2, originalFilename: 'new.pdf' });
     if (url === '/api/work-orders/10/comments/1' && method === 'DELETE') return noContent();
     if (url === '/api/work-orders/10' && method === 'PUT') return okResponse(workOrder);
     if (url === '/api/work-orders/10/cancel' && method === 'POST') return okResponse({ ...workOrder, status: '已取消' });
@@ -259,6 +274,38 @@ describe('App', () => {
     expect(wrapper.html()).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
   });
 
+  it('loads and renders work order attachments on the detail page', async () => {
+    const wrapper = await mountWithApi(user, [workOrder]);
+    await wrapper.find('.work-order-item').trigger('click');
+    await flushPromises();
+
+    const attachmentsCall = vi.mocked(globalThis.fetch).mock.calls.find(([url, init]) => url.toString() === '/api/work-orders/10/attachments' && (init?.method || 'GET') === 'GET');
+    expect(attachmentsCall).toBeTruthy();
+    expect(wrapper.text()).toContain('report.pdf');
+    expect(wrapper.text()).toContain('2.0 KB');
+    expect(wrapper.find('a[href="/api/work-orders/10/attachments/1/download"]').exists()).toBe(true);
+  });
+
+  it('uploads an attachment and refreshes attachments and operation logs', async () => {
+    const wrapper = await mountWithApi(user, [workOrder]);
+    await wrapper.find('.work-order-item').trigger('click');
+    await flushPromises();
+
+    const input = wrapper.find('.file-upload-button input');
+    const file = new File(['hello'], 'new.pdf', { type: 'application/pdf' });
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true });
+    await input.trigger('change');
+    await flushPromises();
+
+    const uploadCall = vi.mocked(globalThis.fetch).mock.calls.find(([url, init]) => url.toString() === '/api/work-orders/10/attachments' && init?.method === 'POST');
+    expect(uploadCall).toBeTruthy();
+    expect(uploadCall![1]!.body).toBeInstanceOf(FormData);
+    const attachmentListCalls = vi.mocked(globalThis.fetch).mock.calls.filter(([url, init]) => url.toString() === '/api/work-orders/10/attachments' && (init?.method || 'GET') === 'GET');
+    const logCalls = vi.mocked(globalThis.fetch).mock.calls.filter(([url, init]) => url.toString() === '/api/work-orders/10/logs' && (init?.method || 'GET') === 'GET');
+    expect(attachmentListCalls.length).toBeGreaterThanOrEqual(2);
+    expect(logCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it('adds a non-empty comment and refreshes comments and operation logs', async () => {
     const wrapper = await mountWithApi(user, [workOrder]);
     await wrapper.find('.work-order-item').trigger('click');
@@ -414,6 +461,7 @@ describe('App', () => {
       if (url === '/api/work-orders/10' && method === 'GET') return okResponse(workOrder);
       if (url === '/api/work-orders/10/logs' && method === 'GET') return okResponse(operationLogs);
       if (url === '/api/work-orders/10/comments' && method === 'GET') return okResponse(comments);
+      if (url === '/api/work-orders/10/attachments' && method === 'GET') return okResponse(attachments);
       if (url.startsWith('/api/work-orders') && method === 'GET') return okResponse(paged([workOrder]));
       if (url === '/api/work-orders/10' && method === 'PUT') {
         return okResponse({ ...workOrder, title: '新标题', description: '新描述', type: '账号问题' });
