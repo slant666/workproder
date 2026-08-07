@@ -31,6 +31,34 @@ const handlers = [
   { id: 2, username: 'admin', nickname: 'Admin' },
   { id: 3, username: 'handler', nickname: 'Handler' },
 ];
+const operationLogs = [
+  {
+    id: 1,
+    workOrderId: 10,
+    actorId: 1,
+    actorUsername: 'demo',
+    actorNickname: 'Demo',
+    action: 'create',
+    fieldName: null,
+    oldValue: null,
+    newValue: workOrder.title,
+    detailsJson: null,
+    createdAt: '2026-08-07T00:00:00Z',
+  },
+  {
+    id: 2,
+    workOrderId: 10,
+    actorId: 2,
+    actorUsername: 'admin',
+    actorNickname: 'Admin',
+    action: 'assign_handler',
+    fieldName: 'handler',
+    oldValue: null,
+    newValue: 'admin',
+    detailsJson: null,
+    createdAt: '2026-08-07T01:00:00Z',
+  },
+];
 
 function mountApp() {
   return mount(App, { global: { plugins: [ElementPlus] } });
@@ -46,6 +74,7 @@ function mockApi(currentUser: unknown = null, orders: unknown[] = []) {
     if (url === '/api/auth/me') return currentUser ? okResponse(currentUser) : okResponse({ message: '请先登录' }, 401);
     if (url === '/api/work-orders' && method === 'POST') return okResponse(workOrder);
     if (url === '/api/work-orders/10' && method === 'GET') return okResponse(detailOrder);
+    if (url === '/api/work-orders/10/logs' && method === 'GET') return okResponse(operationLogs);
     if (url === '/api/work-orders/10' && method === 'PUT') return okResponse(workOrder);
     if (url === '/api/work-orders/10/cancel' && method === 'POST') return okResponse({ ...workOrder, status: '已取消' });
     if (url.startsWith('/api/work-orders') && method === 'GET') return currentUser ? okResponse(paged(orders)) : okResponse({ message: '请先登录' }, 401);
@@ -177,6 +206,20 @@ describe('App', () => {
     expect(wrapper.findAll('button').map((button) => button.text())).toContain('取消工单');
   });
 
+  it('loads and renders work order operation logs on the detail page', async () => {
+    const wrapper = await mountWithApi(user, [workOrder]);
+    await wrapper.find('.work-order-item').trigger('click');
+    await flushPromises();
+
+    const logsCall = vi.mocked(globalThis.fetch).mock.calls.find(([url, init]) => url.toString() === '/api/work-orders/10/logs' && (init?.method || 'GET') === 'GET');
+    expect(logsCall).toBeTruthy();
+    expect(wrapper.text()).toContain('工单操作记录');
+    expect(wrapper.text()).toContain('创建工单');
+    expect(wrapper.text()).toContain('分配处理人');
+    expect(wrapper.text()).toContain('Demo（demo）');
+    expect(wrapper.text()).toContain('admin');
+  });
+
   it('only shows actions for a manageable pending work order', async () => {
     const otherOrder = { ...workOrder, creatorId: 99, creatorUsername: 'other' };
     const completedOrder = { ...workOrder, status: '已完成' };
@@ -266,6 +309,7 @@ describe('App', () => {
       if (url === '/api/system/database') return okResponse({ status: 'ok', database: 'mysql', validation: 1 });
       if (url === '/api/auth/me') return okResponse(user);
       if (url === '/api/work-orders/10' && method === 'GET') return okResponse(workOrder);
+      if (url === '/api/work-orders/10/logs' && method === 'GET') return okResponse(operationLogs);
       if (url.startsWith('/api/work-orders') && method === 'GET') return okResponse(paged([workOrder]));
       if (url === '/api/work-orders/10' && method === 'PUT') {
         return okResponse({ ...workOrder, title: '新标题', description: '新描述', type: '账号问题' });

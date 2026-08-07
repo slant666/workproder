@@ -17,9 +17,11 @@ import {
   confirmWorkOrder,
   createWorkOrder,
   fetchWorkOrderDetail,
+  fetchWorkOrderLogs,
   fetchWorkOrders,
   updateWorkOrder,
   type WorkOrder,
+  type WorkOrderOperationLog,
 } from './api/workOrders';
 import {
   changePassword,
@@ -84,6 +86,7 @@ const adminWorkOrderPage = ref(1);
 const adminWorkOrderPageSize = ref(10);
 const adminWorkOrderTotalPages = ref(0);
 const selectedWorkOrder = ref<WorkOrder | null>(null);
+const operationLogs = ref<WorkOrderOperationLog[]>([]);
 const registerError = ref('');
 const loginError = ref('');
 const successMessage = ref('');
@@ -99,6 +102,7 @@ const isWorkOrdersLoading = ref(false);
 const isDetailLoading = ref(false);
 const isAdminWorkOrdersLoading = ref(false);
 const isAdminHandlersLoading = ref(false);
+const isOperationLogsLoading = ref(false);
 const isWorkOrderActionSubmitting = ref(false);
 const isEditingWorkOrder = ref(false);
 const workOrdersLoaded = ref(false);
@@ -146,6 +150,51 @@ function formatTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value || '无创建时间';
   return date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function operationActionLabel(action: string) {
+  const labels: Record<string, string> = {
+    create: '\u521b\u5efa\u5de5\u5355',
+    update: '\u4fee\u6539\u5de5\u5355',
+    assign_handler: '\u5206\u914d\u5904\u7406\u4eba',
+    accept: '\u63a5\u5355',
+    submit: '\u63d0\u4ea4\u786e\u8ba4',
+    return: '\u9000\u56de\u5904\u7406\u4e2d',
+    confirm: '\u786e\u8ba4\u5b8c\u6210',
+    cancel: '\u53d6\u6d88\u5de5\u5355',
+    comment_add: '\u6dfb\u52a0\u8bc4\u8bba',
+    comment_update: '\u4fee\u6539\u8bc4\u8bba',
+    comment_delete: '\u5220\u9664\u8bc4\u8bba',
+    attachment_add: '\u6dfb\u52a0\u9644\u4ef6',
+    attachment_delete: '\u5220\u9664\u9644\u4ef6',
+  };
+  return labels[action] || action;
+}
+
+function operationFieldLabel(fieldName?: string | null) {
+  const labels: Record<string, string> = {
+    title: '\u6807\u9898',
+    description: '\u63cf\u8ff0',
+    type: '\u7c7b\u578b',
+    priority: '\u4f18\u5148\u7ea7',
+    handler: '\u5904\u7406\u4eba',
+    status: '\u72b6\u6001',
+    comment: '\u8bc4\u8bba',
+    attachment: '\u9644\u4ef6',
+  };
+  return fieldName ? labels[fieldName] || fieldName : '';
+}
+
+function operationActor(log: WorkOrderOperationLog) {
+  return log.actorNickname ? `${log.actorNickname}\uff08${log.actorUsername}\uff09` : log.actorUsername;
+}
+
+function operationChangeText(log: WorkOrderOperationLog) {
+  const field = operationFieldLabel(log.fieldName);
+  if (log.oldValue != null && log.newValue != null) return `${field}\uff1a${log.oldValue} \u2192 ${log.newValue}`;
+  if (log.newValue != null && field) return `${field}\uff1a${log.newValue}`;
+  if (log.newValue != null) return log.newValue;
+  return field;
 }
 
 function validateRegisterForm() {
@@ -223,6 +272,7 @@ async function openWorkOrders(options: { resetPage?: boolean } = {}) {
   detailError.value = '';
   adminError.value = '';
   selectedWorkOrder.value = null;
+  operationLogs.value = [];
   isEditingWorkOrder.value = false;
   try {
     const response = await fetchWorkOrders({
@@ -351,10 +401,12 @@ async function openWorkOrderDetail(id: number) {
   detailError.value = '';
   workOrderError.value = '';
   selectedWorkOrder.value = null;
+  operationLogs.value = [];
   isEditingWorkOrder.value = false;
   try {
     selectedWorkOrder.value = await fetchWorkOrderDetail(id);
     assignmentForm.handlerId = selectedWorkOrder.value.handlerId ?? undefined;
+    await loadOperationLogs(id);
     if (isAdmin.value && adminHandlers.value.length === 0) {
       await loadAdminHandlers();
     }
@@ -362,6 +414,19 @@ async function openWorkOrderDetail(id: number) {
     detailError.value = error instanceof Error ? error.message : '获取工单详情失败';
   } finally {
     isDetailLoading.value = false;
+  }
+}
+
+async function loadOperationLogs(id = selectedWorkOrder.value?.id) {
+  if (!id) return;
+  isOperationLogsLoading.value = true;
+  try {
+    operationLogs.value = await fetchWorkOrderLogs(id);
+  } catch (error) {
+    detailError.value = error instanceof Error ? error.message : '\u83b7\u53d6\u5de5\u5355\u65e5\u5fd7\u5931\u8d25';
+    operationLogs.value = [];
+  } finally {
+    isOperationLogsLoading.value = false;
   }
 }
 
@@ -392,6 +457,7 @@ async function submitHandlerAssignment() {
   try {
     const updated = await assignWorkOrderHandler(workOrder.id, assignmentForm.handlerId);
     applyUpdatedWorkOrder(updated);
+    await loadOperationLogs(updated.id);
     workOrderMessage.value = '处理人分配成功';
   } catch (error) {
     detailError.value = error instanceof Error ? error.message : '分配处理人失败';
@@ -427,7 +493,9 @@ async function runStateAction(
   workOrderMessage.value = '';
   isWorkOrderActionSubmitting.value = true;
   try {
-    applyUpdatedWorkOrder(await action());
+    const updated = await action();
+    applyUpdatedWorkOrder(updated);
+    await loadOperationLogs(updated.id);
     isEditingWorkOrder.value = false;
     workOrderMessage.value = success;
   } catch (error) {
@@ -534,12 +602,14 @@ async function submitWorkOrderEdit() {
 
   isWorkOrderActionSubmitting.value = true;
   try {
-    selectedWorkOrder.value = await updateWorkOrder(workOrder.id, {
+    const updated = await updateWorkOrder(workOrder.id, {
       title: editWorkOrderForm.title.trim(),
       description: editWorkOrderForm.description.trim(),
       type: editWorkOrderForm.type.trim(),
       priority: editWorkOrderForm.priority,
     });
+    applyUpdatedWorkOrder(updated);
+    await loadOperationLogs(updated.id);
     isEditingWorkOrder.value = false;
     workOrderMessage.value = '工单修改成功';
   } catch (error) {
@@ -566,7 +636,9 @@ async function submitWorkOrderCancellation() {
   workOrderMessage.value = '';
   isWorkOrderActionSubmitting.value = true;
   try {
-    applyUpdatedWorkOrder(await cancelWorkOrder(workOrder.id));
+    const updated = await cancelWorkOrder(workOrder.id);
+    applyUpdatedWorkOrder(updated);
+    await loadOperationLogs(updated.id);
     isEditingWorkOrder.value = false;
     workOrderMessage.value = '工单已取消';
   } catch (error) {
@@ -650,6 +722,7 @@ async function logout() {
   currentUser.value = null;
   workOrders.value = [];
   selectedWorkOrder.value = null;
+  operationLogs.value = [];
   workOrdersLoaded.value = false;
   adminLoaded.value = false;
   currentView.value = 'login';
@@ -939,6 +1012,23 @@ onMounted(() => {
                   <div><dt>处理人</dt><dd>{{ selectedWorkOrder.handlerUsername || '未分配' }}</dd></div>
                   <div><dt>创建时间</dt><dd>{{ formatTime(selectedWorkOrder.createdAt) }}</dd></div>
                 </dl>
+                <section class="operation-log-section" aria-label="工单操作记录">
+                  <h4>工单操作记录</h4>
+                  <p v-if="isOperationLogsLoading" class="empty-state">操作记录加载中...</p>
+                  <p v-else-if="operationLogs.length === 0" class="empty-state">暂无操作记录</p>
+                  <el-timeline v-else class="operation-timeline">
+                    <el-timeline-item
+                      v-for="log in operationLogs"
+                      :key="log.id"
+                      :timestamp="formatTime(log.createdAt)"
+                      placement="top"
+                    >
+                      <strong>{{ operationActionLabel(log.action) }}</strong>
+                      <span class="operation-actor">{{ operationActor(log) }}</span>
+                      <p v-if="operationChangeText(log)" class="operation-change">{{ operationChangeText(log) }}</p>
+                    </el-timeline-item>
+                  </el-timeline>
+                </section>
                 <el-form v-if="canAssignSelectedWorkOrder" class="assignment-form" label-position="top" @submit.prevent="submitHandlerAssignment">
                   <el-form-item label="选择处理人">
                     <el-select

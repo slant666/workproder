@@ -19,6 +19,7 @@ class WorkOrderServiceTests {
     void setUp() {
         DriverManagerDataSource dataSource = new DriverManagerDataSource("jdbc:h2:mem:workorders;MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         jdbcTemplate = new JdbcTemplate(dataSource);
+        jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_operation_logs");
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_status_transitions");
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_assignments");
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_orders");
@@ -65,6 +66,19 @@ class WorkOrderServiceTests {
                     new_status VARCHAR(20) NOT NULL,
                     actor_id BIGINT NOT NULL,
                     action VARCHAR(40) NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE work_order_operation_logs (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    work_order_id BIGINT NOT NULL,
+                    actor_id BIGINT NOT NULL,
+                    action VARCHAR(60) NOT NULL,
+                    field_name VARCHAR(60) NULL,
+                    old_value TEXT NULL,
+                    new_value TEXT NULL,
+                    details_json TEXT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """);
@@ -491,5 +505,57 @@ class WorkOrderServiceTests {
         assertThatThrownBy(() -> workOrderService.assignHandler(1L, new AssignWorkOrderRequest(0L), admin))
                 .isInstanceOf(WorkOrderException.class)
                 .hasMessage("\u5904\u7406\u4eba\u53c2\u6570\u4e0d\u6b63\u786e");
+    }
+
+    @Test
+    void recordsCreateUpdateAssignmentAndStatusOperationLogs() {
+        CurrentUser creator = new CurrentUser(1L, "demo", "Demo", "USER");
+        CurrentUser admin = new CurrentUser(3L, "admin", "Admin", "ADMIN");
+
+        WorkOrderResponse created = workOrderService.create(
+                new CreateWorkOrderRequest("Printer", "Cannot print", "Device", "\u9ad8"),
+                creator);
+        assertThat(workOrderService.listVisibleOperationLogs(created.id(), creator))
+                .extracting(WorkOrderOperationLogResponse::action)
+                .containsExactly("create");
+
+        workOrderService.update(created.id(), new UpdateWorkOrderRequest("Printer 2", "Cannot scan", "Account", "\u4e2d"), creator);
+        workOrderService.assignHandler(created.id(), new AssignWorkOrderRequest(4L), admin);
+        workOrderService.accept(created.id(), new CurrentUser(4L, "handler", "Handler", "ADMIN"));
+
+        assertThat(workOrderService.listVisibleOperationLogs(created.id(), creator))
+                .extracting(WorkOrderOperationLogResponse::action)
+                .containsExactly("create", "update", "update", "update", "update", "assign_handler", "accept");
+        assertThat(workOrderService.listVisibleOperationLogs(created.id(), creator))
+                .filteredOn(log -> "update".equals(log.action()))
+                .extracting(WorkOrderOperationLogResponse::fieldName)
+                .containsExactly("title", "description", "type", "priority");
+    }
+
+    @Test
+    void skipsUpdateLogsWhenFieldsDoNotChange() {
+        CurrentUser creator = new CurrentUser(1L, "demo", "Demo", "USER");
+        WorkOrderResponse existing = workOrderService.getVisibleDetail(1L, creator);
+
+        workOrderService.update(
+                existing.id(),
+                new UpdateWorkOrderRequest(existing.title(), existing.description(), existing.type(), existing.priority()),
+                creator);
+
+        assertThat(workOrderService.listVisibleOperationLogs(existing.id(), creator)).isEmpty();
+    }
+
+    @Test
+    void onlyAuthorizedUsersCanReadOperationLogs() {
+        CurrentUser owner = new CurrentUser(1L, "demo", "Demo", "USER");
+        CurrentUser other = new CurrentUser(2L, "other", "Other", "USER");
+        CurrentUser admin = new CurrentUser(3L, "admin", "Admin", "ADMIN");
+
+        workOrderService.cancel(1L, owner);
+
+        assertThat(workOrderService.listVisibleOperationLogs(1L, owner)).hasSize(1);
+        assertThat(workOrderService.listVisibleOperationLogs(1L, admin)).hasSize(1);
+        assertThatThrownBy(() -> workOrderService.listVisibleOperationLogs(1L, other))
+                .isInstanceOf(ForbiddenException.class);
     }
 }
