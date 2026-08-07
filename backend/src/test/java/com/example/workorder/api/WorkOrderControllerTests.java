@@ -1,0 +1,175 @@
+package com.example.workorder.api;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.example.workorder.auth.CurrentUser;
+import com.example.workorder.auth.PermissionService;
+import com.example.workorder.auth.SessionKeys;
+import com.example.workorder.workorder.CreateWorkOrderRequest;
+import com.example.workorder.workorder.PagedWorkOrderResponse;
+import com.example.workorder.workorder.UpdateWorkOrderRequest;
+import com.example.workorder.workorder.WorkOrderListQuery;
+import com.example.workorder.workorder.WorkOrderResponse;
+import com.example.workorder.workorder.WorkOrderService;
+import java.time.Instant;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockHttpSession;
+
+class WorkOrderControllerTests {
+
+    private static final String PENDING = "\u5f85\u5904\u7406";
+    private static final String CANCELLED = "\u5df2\u53d6\u6d88";
+    private static final String HIGH = "\u9ad8";
+    private static final String LOW = "\u4f4e";
+
+    @Test
+    void listsVisibleWorkOrdersForCurrentUser() {
+        FakeWorkOrderService workOrderService = new FakeWorkOrderService();
+        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        MockHttpSession session = session(new CurrentUser(1L, "demo", "Demo", "USER"));
+
+        assertThat(controller.list(null, null, null, null, null, null, session).items()).isEmpty();
+        assertThat(workOrderService.visibleUser.id()).isEqualTo(1L);
+    }
+
+    @Test
+    void passesListQueryParametersToService() {
+        FakeWorkOrderService workOrderService = new FakeWorkOrderService();
+        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        MockHttpSession session = session(new CurrentUser(1L, "demo", "Demo", "USER"));
+
+        controller.list("printer", PENDING, HIGH, "createdAtAsc", 2, 20, session);
+
+        assertThat(workOrderService.query).isEqualTo(new WorkOrderListQuery("printer", PENDING, HIGH, "createdAtAsc", 2, 20));
+        assertThat(workOrderService.visibleUser.id()).isEqualTo(1L);
+    }
+
+    @Test
+    void createsWorkOrderForCurrentSessionUser() {
+        FakeWorkOrderService workOrderService = new FakeWorkOrderService();
+        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        MockHttpSession session = session(new CurrentUser(7L, "demo", "Demo", "USER"));
+
+        WorkOrderResponse response = controller.create(
+                new CreateWorkOrderRequest("Printer issue", "Cannot print", "Device", HIGH),
+                session);
+
+        assertThat(workOrderService.creator.id()).isEqualTo(7L);
+        assertThat(response.status()).isEqualTo(PENDING);
+        assertThat(response.creatorId()).isEqualTo(7L);
+    }
+
+    @Test
+    void loadsDetailForCurrentSessionUser() {
+        FakeWorkOrderService workOrderService = new FakeWorkOrderService();
+        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        MockHttpSession session = session(new CurrentUser(3L, "admin", "Admin", "ADMIN"));
+
+        WorkOrderResponse response = controller.detail(10L, session);
+
+        assertThat(workOrderService.detailId).isEqualTo(10L);
+        assertThat(workOrderService.visibleUser.id()).isEqualTo(3L);
+        assertThat(response.title()).isEqualTo("Printer issue");
+    }
+
+    @Test
+    void updatesWorkOrderForCurrentSessionUser() {
+        FakeWorkOrderService workOrderService = new FakeWorkOrderService();
+        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        MockHttpSession session = session(new CurrentUser(7L, "demo", "Demo", "USER"));
+        UpdateWorkOrderRequest request = new UpdateWorkOrderRequest("New title", "New description", "Account", LOW);
+
+        WorkOrderResponse response = controller.update(10L, request, session);
+
+        assertThat(workOrderService.updatedId).isEqualTo(10L);
+        assertThat(workOrderService.updateRequest).isSameAs(request);
+        assertThat(workOrderService.visibleUser.id()).isEqualTo(7L);
+        assertThat(response.title()).isEqualTo("New title");
+    }
+
+    @Test
+    void cancelsWorkOrderForCurrentSessionUser() {
+        FakeWorkOrderService workOrderService = new FakeWorkOrderService();
+        WorkOrderController controller = new WorkOrderController(new PermissionService(), workOrderService);
+        MockHttpSession session = session(new CurrentUser(3L, "admin", "Admin", "ADMIN"));
+
+        WorkOrderResponse response = controller.cancel(10L, session);
+
+        assertThat(workOrderService.cancelledId).isEqualTo(10L);
+        assertThat(workOrderService.visibleUser.id()).isEqualTo(3L);
+        assertThat(response.status()).isEqualTo(CANCELLED);
+    }
+
+    private MockHttpSession session(CurrentUser user) {
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(SessionKeys.CURRENT_USER, user);
+        return session;
+    }
+
+    private static class FakeWorkOrderService extends WorkOrderService {
+        private CurrentUser visibleUser;
+        private CurrentUser creator;
+        private Long detailId;
+        private Long updatedId;
+        private Long cancelledId;
+        private UpdateWorkOrderRequest updateRequest;
+        private WorkOrderListQuery query;
+
+        FakeWorkOrderService() {
+            super(null);
+        }
+
+        @Override
+        public PagedWorkOrderResponse listVisible(WorkOrderListQuery query, CurrentUser currentUser) {
+            this.query = query;
+            visibleUser = currentUser;
+            return new PagedWorkOrderResponse(List.of(), 0, 1, 10, 0);
+        }
+
+        @Override
+        public WorkOrderResponse create(CreateWorkOrderRequest request, CurrentUser creator) {
+            this.creator = creator;
+            return response(request.title(), creator.id(), creator.username());
+        }
+
+        @Override
+        public WorkOrderResponse getVisibleDetail(Long id, CurrentUser currentUser) {
+            detailId = id;
+            visibleUser = currentUser;
+            return response("Printer issue", 1L, "demo");
+        }
+
+        @Override
+        public WorkOrderResponse update(Long id, UpdateWorkOrderRequest request, CurrentUser currentUser) {
+            updatedId = id;
+            updateRequest = request;
+            visibleUser = currentUser;
+            return response(request.title(), 1L, "demo");
+        }
+
+        @Override
+        public WorkOrderResponse cancel(Long id, CurrentUser currentUser) {
+            cancelledId = id;
+            visibleUser = currentUser;
+            return response("Printer issue", 1L, "demo", CANCELLED);
+        }
+
+        private WorkOrderResponse response(String title, Long creatorId, String creatorUsername) {
+            return response(title, creatorId, creatorUsername, PENDING);
+        }
+
+        private WorkOrderResponse response(String title, Long creatorId, String creatorUsername, String status) {
+            return new WorkOrderResponse(
+                    10L,
+                    title,
+                    "Cannot print",
+                    "Device",
+                    HIGH,
+                    status,
+                    creatorId,
+                    creatorUsername,
+                    Instant.parse("2026-08-07T00:00:00Z"));
+        }
+    }
+}
