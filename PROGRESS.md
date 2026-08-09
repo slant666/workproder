@@ -85,6 +85,7 @@ Implementation complete. The backend compile issue reported in `AdminUserService
 - `frontend`: `ReadLints` reported no diagnostics for edited frontend files.
 - `frontend`: `npm.cmd run test -- --run` could not be confirmed because the local terminal transport repeatedly closed with `Missing terminal shell stream event` before returning output.
 - `git`: commit-and-push could not be completed from the agent. `git status --short --branch` did not return through the local shell transport; an isolated shell attempt also returned a shell stream event error.
+- `shell`: even `cmd.exe /c ver` fails with the same `Missing terminal shell stream event`, so the blocker is Cursor agent shell transport rather than repository-specific Git state.
 
 ## Notes
 
