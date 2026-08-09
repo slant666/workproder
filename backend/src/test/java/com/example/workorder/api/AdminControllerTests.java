@@ -3,6 +3,9 @@ package com.example.workorder.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.example.workorder.auth.AdminUserListQuery;
+import com.example.workorder.auth.AdminUserResponse;
+import com.example.workorder.auth.AdminUserService;
 import com.example.workorder.auth.CurrentUser;
 import com.example.workorder.auth.ForbiddenException;
 import com.example.workorder.auth.PermissionService;
@@ -21,7 +24,8 @@ import org.springframework.mock.web.MockHttpSession;
 
 class AdminControllerTests {
 
-    private final AdminController controller = new AdminController(new PermissionService(), new WorkOrderService(null));
+    private final AdminController controller = new AdminController(
+            new PermissionService(), new WorkOrderService(null), new FakeAdminUserService());
 
     @Test
     void adminCanOpenAdminOverview() {
@@ -44,9 +48,33 @@ class AdminControllerTests {
     }
 
     @Test
+    void adminCanListUsers() {
+        FakeAdminUserService adminUserService = new FakeAdminUserService();
+        AdminController controller = new AdminController(new PermissionService(), new FakeWorkOrderService(), adminUserService);
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(1L, "admin", "Admin", "ADMIN"));
+
+        assertThat(controller.users("demo", 2, 20, session).total()).isEqualTo(1);
+        assertThat(adminUserService.query).isEqualTo(new AdminUserListQuery("demo", 2, 20));
+    }
+
+    @Test
+    void userCannotListUsers() {
+        FakeAdminUserService adminUserService = new FakeAdminUserService();
+        AdminController controller = new AdminController(new PermissionService(), new FakeWorkOrderService(), adminUserService);
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(2L, "demo", "Demo", "USER"));
+
+        assertThatThrownBy(() -> controller.users(null, null, null, session))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage("Access denied");
+        assertThat(adminUserService.query).isNull();
+    }
+
+    @Test
     void adminCanListWorkOrdersWithFilters() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService);
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(1L, "admin", "Admin", "ADMIN"));
 
@@ -63,7 +91,7 @@ class AdminControllerTests {
     @Test
     void userCannotListAdminWorkOrders() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService);
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(2L, "demo", "Demo", "USER"));
 
@@ -76,7 +104,7 @@ class AdminControllerTests {
     @Test
     void adminCanListEnabledHandlers() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService);
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(1L, "admin", "Admin", "ADMIN"));
 
@@ -87,7 +115,7 @@ class AdminControllerTests {
     @Test
     void userCannotListEnabledHandlers() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService);
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(2L, "demo", "Demo", "USER"));
 
@@ -99,7 +127,7 @@ class AdminControllerTests {
     @Test
     void adminCanAssignHandler() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService);
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(1L, "admin", "Admin", "ADMIN"));
 
@@ -114,7 +142,7 @@ class AdminControllerTests {
     @Test
     void userCannotAssignHandler() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService);
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(2L, "demo", "Demo", "USER"));
 
@@ -127,7 +155,7 @@ class AdminControllerTests {
     @Test
     void adminCanRunAdminStateActions() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService);
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(1L, "admin", "Admin", "ADMIN"));
 
@@ -142,7 +170,7 @@ class AdminControllerTests {
     @Test
     void userCannotRunAdminStateActions() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService);
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(2L, "demo", "Demo", "USER"));
 
@@ -155,6 +183,25 @@ class AdminControllerTests {
         assertThat(workOrderService.acceptedId).isNull();
         assertThat(workOrderService.submittedId).isNull();
         assertThat(workOrderService.returnedId).isNull();
+    }
+
+    private static class FakeAdminUserService extends AdminUserService {
+        private AdminUserListQuery query;
+
+        FakeAdminUserService() {
+            super(null);
+        }
+
+        @Override
+        public com.example.workorder.auth.PagedAdminUserResponse list(AdminUserListQuery query) {
+            this.query = query;
+            return new com.example.workorder.auth.PagedAdminUserResponse(
+                    List.of(new AdminUserResponse(
+                            2L, "demo", "Demo", "USER", true,
+                            Instant.parse("2026-08-07T00:00:00Z"),
+                            Instant.parse("2026-08-08T00:00:00Z"))),
+                    1, 2, 20, 1);
+        }
     }
 
     private static class FakeWorkOrderService extends WorkOrderService {

@@ -13,6 +13,30 @@ export interface AdminHandler {
   nickname: string;
 }
 
+export interface AdminUser {
+  id: number;
+  username: string;
+  nickname: string;
+  role: 'USER' | 'ADMIN';
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PagedAdminUsers {
+  items: AdminUser[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+export interface AdminUserListQuery {
+  keyword?: string;
+  page?: number;
+  pageSize?: number;
+}
+
 async function readAdminError(response: Response, fallback: string) {
   try {
     const body = (await response.json()) as { message?: string };
@@ -39,6 +63,67 @@ export async function fetchAdminOverview(): Promise<{ status: string; area: stri
   }
 
   return response.json() as Promise<{ status: string; area: string }>;
+}
+
+export async function fetchAdminUsers(query: AdminUserListQuery = {}): Promise<PagedAdminUsers> {
+  const params = new URLSearchParams();
+  if (query.keyword?.trim()) params.set('keyword', query.keyword.trim());
+  if (query.page !== undefined) params.set('page', String(query.page));
+  if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+  const url = params.size > 0 ? `/api/admin/users?${params.toString()}` : '/api/admin/users';
+  const response = await fetch(url);
+
+  if (response.status === 401) {
+    throw new Error('\u8bf7\u5148\u767b\u5f55');
+  }
+  if (response.status === 403) {
+    throw new Error(await readAdminError(response, 'Access denied'));
+  }
+  if (!response.ok) {
+    throw new Error(await readAdminError(response, '\u83b7\u53d6\u7528\u6237\u5217\u8868\u5931\u8d25'));
+  }
+
+  return response.json() as Promise<PagedAdminUsers>;
+}
+
+export async function updateAdminUserEnabled(id: number, enabled: boolean): Promise<AdminUser> {
+  const response = await fetch(`/api/admin/users/${id}/enabled`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+
+  if (response.status === 401) {
+    throw new Error('\u8bf7\u5148\u767b\u5f55');
+  }
+  if (response.status === 403) {
+    throw new Error(await readAdminError(response, 'Access denied'));
+  }
+  if (!response.ok) {
+    throw new Error(await readAdminError(response, '\u66f4\u65b0\u7528\u6237\u72b6\u6001\u5931\u8d25'));
+  }
+
+  return response.json() as Promise<AdminUser>;
+}
+
+export async function updateAdminUserRole(id: number, role: 'USER' | 'ADMIN'): Promise<AdminUser> {
+  const response = await fetch(`/api/admin/users/${id}/role`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  });
+
+  if (response.status === 401) {
+    throw new Error('\u8bf7\u5148\u767b\u5f55');
+  }
+  if (response.status === 403) {
+    throw new Error(await readAdminError(response, 'Access denied'));
+  }
+  if (!response.ok) {
+    throw new Error(await readAdminError(response, '\u66f4\u65b0\u7528\u6237\u89d2\u8272\u5931\u8d25'));
+  }
+
+  return response.json() as Promise<AdminUser>;
 }
 
 export async function fetchAdminWorkOrders(query: AdminWorkOrderListQuery = {}): Promise<PagedWorkOrders> {

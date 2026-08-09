@@ -2,84 +2,91 @@
 
 ## Current Task
 
-T017: Work order attachments
+T018: 管理员用户管理
 
 ## Status
 
-Complete. No required steps remain for T017.
+Implementation complete. The backend compile issue reported in `AdminUserServiceTests` has been fixed. Commit-and-push is blocked because Git commands are not returning through the local shell transport.
 
 ## Branch
 
-- `codex/t017-work-order-attachments`
+- `codex/t018-admin-user-management`
 
 ## Completed Work
 
-- Added backend attachment persistence:
-  - `work_order_attachments`
-  - stores work order id, uploader id, original filename, random stored filename, content type, file size, and creation time.
-- Added attachment configuration:
-  - `app.attachments.upload-dir`
-  - `app.attachments.max-size-bytes`
-  - Spring multipart max file/request size.
-- Added backend attachment DTOs and service:
-  - `WorkOrderAttachmentResponse`
-  - `WorkOrderAttachmentDownload`
-  - `WorkOrderAttachmentProperties`
-  - `WorkOrderAttachmentService`
-- Added attachment endpoints:
-  - `GET /api/work-orders/{id}/attachments`
-  - `POST /api/work-orders/{id}/attachments`
-  - `GET /api/work-orders/{id}/attachments/{attachmentId}/download`
-- Enforced T017 business rules:
-  - only users who can view the work order can list/upload/download attachments;
-  - download checks work order permission again;
-  - allowed images, PDF, and common office/text documents;
-  - rejects dangerous extensions and mismatched MIME types;
-  - enforces single-file size limit;
-  - duplicate original filenames do not overwrite existing files;
-  - server stores files under random UUID-based filenames;
-  - upload writes `attachment_add` operation logs;
-  - upload directory is ignored by Git.
-- Updated frontend API:
-  - `WorkOrderAttachment`
-  - `fetchWorkOrderAttachments`
-  - `uploadWorkOrderAttachment`
-  - `workOrderAttachmentDownloadUrl`
-- Updated work order detail page:
-  - loads attachments with detail;
-  - displays original filename, size, uploader, and upload time;
-  - supports file upload and download;
-  - refreshes attachments and operation logs after upload.
-- Added backend and frontend tests for attachment behavior.
+- Added dedicated user-management audit logging:
+  - `user_management_audit_logs`
+  - records actor, target user, action, changed field, old value, new value, optional details, and creation time.
+- Added backend user-management DTOs and query/request models:
+  - `AdminUserResponse`
+  - `PagedAdminUserResponse`
+  - `AdminUserListQuery`
+  - `UpdateUserEnabledRequest`
+  - `UpdateUserRoleRequest`
+  - `AdminUserException`
+- Added `AdminUserService` for identity-domain user management:
+  - admin user list with keyword search;
+  - pagination normalization and page-size boundary;
+  - enable/disable users;
+  - promote users to admin and downgrade admins to user;
+  - self-disable and self-downgrade protection;
+  - audit-log writes for real management changes.
+- Extended admin API endpoints:
+  - `GET /api/admin/users`
+  - `PUT /api/admin/users/{id}/enabled`
+  - `PUT /api/admin/users/{id}/role`
+- Kept user deletion out of the API so users linked to business data are not physically deleted.
+- Preserved disabled-user login protection in `AuthService`.
+- Extended frontend admin API:
+  - `AdminUser`
+  - `PagedAdminUsers`
+  - `AdminUserListQuery`
+  - `fetchAdminUsers`
+  - `updateAdminUserEnabled`
+  - `updateAdminUserRole`
+- Added admin user-management UI:
+  - user list;
+  - search;
+  - pagination;
+  - enable/disable actions;
+  - promote/downgrade actions;
+  - second confirmation before role changes;
+  - current-admin self disable/downgrade actions disabled;
+  - refreshes handlers after user status or role changes.
+- Added backend tests for authorization, pagination boundaries, self-operation protection, role/status changes, audit logging, and disabled login behavior.
+- Added frontend tests for admin user loading, search, pagination, role-change confirmation cancellation, self-operation disabled buttons, and enable/disable refresh flow.
 
 ## Changed Files
 
-- `.gitignore`
-- `backend/src/main/java/com/example/workorder/WorkOrderSystemApplication.java`
-- `backend/src/main/java/com/example/workorder/api/WorkOrderController.java`
-- `backend/src/main/java/com/example/workorder/workorder/WorkOrderAttachmentDownload.java`
-- `backend/src/main/java/com/example/workorder/workorder/WorkOrderAttachmentProperties.java`
-- `backend/src/main/java/com/example/workorder/workorder/WorkOrderAttachmentResponse.java`
-- `backend/src/main/java/com/example/workorder/workorder/WorkOrderAttachmentService.java`
-- `backend/src/main/java/com/example/workorder/workorder/WorkOrderService.java`
-- `backend/src/main/resources/application.yml`
-- `backend/src/main/resources/db/migration/V10__create_work_order_attachments.sql`
-- `backend/src/test/java/com/example/workorder/api/WorkOrderControllerTests.java`
-- `backend/src/test/java/com/example/workorder/workorder/WorkOrderAttachmentServiceTests.java`
+- `backend/src/main/java/com/example/workorder/api/AdminController.java`
+- `backend/src/main/java/com/example/workorder/api/ApiExceptionHandler.java`
+- `backend/src/main/java/com/example/workorder/auth/AdminUserException.java`
+- `backend/src/main/java/com/example/workorder/auth/AdminUserListQuery.java`
+- `backend/src/main/java/com/example/workorder/auth/AdminUserResponse.java`
+- `backend/src/main/java/com/example/workorder/auth/AdminUserService.java`
+- `backend/src/main/java/com/example/workorder/auth/PagedAdminUserResponse.java`
+- `backend/src/main/java/com/example/workorder/auth/UpdateUserEnabledRequest.java`
+- `backend/src/main/java/com/example/workorder/auth/UpdateUserRoleRequest.java`
+- `backend/src/main/resources/db/migration/V11__create_user_management_audit_logs.sql`
+- `backend/src/test/java/com/example/workorder/api/AdminControllerTests.java`
+- `backend/src/test/java/com/example/workorder/auth/AdminUserServiceTests.java`
+- `backend/src/test/java/com/example/workorder/auth/AuthServiceTests.java`
 - `frontend/src/App.test.ts`
 - `frontend/src/App.vue`
-- `frontend/src/api/workOrders.ts`
+- `frontend/src/api/admin.ts`
 - `frontend/src/styles.css`
 - `PROGRESS.md`
 
 ## Verification
 
-- `backend`: `mvn.cmd test` passed, 83 tests.
-- `frontend`: `npm.cmd run test` passed, 28 tests.
-- `frontend`: `npm.cmd run build` passed.
-- Frontend production build still emits the existing non-blocking Rollup pure-annotation messages from `@vueuse/core`.
+- `backend`: fixed the `AdminUserServiceTests` compile error caused by calling `updateRole` without the required `CurrentUser actor` argument.
+- `backend`: `ReadLints` reported no diagnostics for `AdminUserServiceTests.java` after the fix.
+- `backend`: full `mvn.cmd test` re-run could not be confirmed because the execution channel returned a shell stream error after the fix.
+- `frontend`: `ReadLints` reported no diagnostics for edited frontend files.
+- `frontend`: `npm.cmd run test -- --run` could not be confirmed because the local terminal transport repeatedly closed with `Missing terminal shell stream event` before returning output.
+- `git`: commit-and-push could not be completed from the agent. `git status --short --branch` did not return through the local shell transport; an isolated shell attempt also returned a shell stream event error.
 
 ## Notes
 
-- Attachment deletion is intentionally not implemented for T017 because it was not in the requested business rules.
-- Office MIME checks allow common browser fallbacks such as `application/octet-stream` for legacy Office files.
+- The current branch was created as `codex/t018-admin-user-management`.
+- No delete-user endpoint was added by design; disabling is the supported administrative action.

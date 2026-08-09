@@ -6,10 +6,14 @@ import {
   assignWorkOrderHandler,
   fetchAdminHandlers,
   fetchAdminOverview,
+  fetchAdminUsers,
   fetchAdminWorkOrders,
   returnWorkOrderToProcessing,
   submitWorkOrderForConfirmation,
+  updateAdminUserEnabled,
+  updateAdminUserRole,
   type AdminHandler,
+  type AdminUser,
 } from './api/admin';
 import { checkBackend, checkDatabase, type HealthStatus } from './api/health';
 import {
@@ -69,6 +73,7 @@ const workOrderFilters = reactive({
   priority: '',
   sort: 'createdAtDesc' as 'createdAtDesc' | 'createdAtAsc',
 });
+const adminUserFilters = reactive({ keyword: '' });
 const adminWorkOrderFilters = reactive({
   keyword: '',
   status: '',
@@ -89,7 +94,12 @@ const workOrderPage = ref(1);
 const workOrderPageSize = ref(10);
 const workOrderTotalPages = ref(0);
 const adminWorkOrders = ref<WorkOrder[]>([]);
+const adminUsers = ref<AdminUser[]>([]);
 const adminHandlers = ref<AdminHandler[]>([]);
+const adminUserTotal = ref(0);
+const adminUserPage = ref(1);
+const adminUserPageSize = ref(10);
+const adminUserTotalPages = ref(0);
 const adminWorkOrderTotal = ref(0);
 const adminWorkOrderPage = ref(1);
 const adminWorkOrderPageSize = ref(10);
@@ -111,6 +121,7 @@ const passwordError = ref('');
 const isSubmitting = ref(false);
 const isWorkOrdersLoading = ref(false);
 const isDetailLoading = ref(false);
+const isAdminUsersLoading = ref(false);
 const isAdminWorkOrdersLoading = ref(false);
 const isAdminHandlersLoading = ref(false);
 const isOperationLogsLoading = ref(false);
@@ -367,6 +378,112 @@ async function loadAdminHandlers() {
     adminError.value = error instanceof Error ? error.message : '获取处理人列表失败';
   } finally {
     isAdminHandlersLoading.value = false;
+  }
+}
+
+async function loadAdminUsers(options: { resetPage?: boolean } = {}) {
+  if (!currentUser.value || !isAdmin.value) {
+    currentView.value = 'login';
+    return;
+  }
+  if (options.resetPage) {
+    adminUserPage.value = 1;
+  }
+  isAdminUsersLoading.value = true;
+  adminError.value = '';
+  try {
+    const response = await fetchAdminUsers({
+      keyword: adminUserFilters.keyword,
+      page: adminUserPage.value,
+      pageSize: adminUserPageSize.value,
+    });
+    adminUsers.value = response.items;
+    adminUserTotal.value = response.total;
+    adminUserPage.value = response.page;
+    adminUserPageSize.value = response.pageSize;
+    adminUserTotalPages.value = response.totalPages;
+  } catch (error) {
+    adminUsers.value = [];
+    adminUserTotal.value = 0;
+    adminUserTotalPages.value = 0;
+    adminError.value = error instanceof Error ? error.message : '获取用户列表失败';
+  } finally {
+    isAdminUsersLoading.value = false;
+  }
+}
+
+function applyAdminUserFilters() {
+  void loadAdminUsers({ resetPage: true });
+}
+
+function changeAdminUserPage(page: number) {
+  adminUserPage.value = page;
+  void loadAdminUsers();
+}
+
+function changeAdminUserPageSize(pageSize: number) {
+  adminUserPageSize.value = pageSize;
+  void loadAdminUsers({ resetPage: true });
+}
+
+function isCurrentAdminUser(user: AdminUser) {
+  return currentUser.value?.id === user.id;
+}
+
+async function setAdminUserEnabled(user: AdminUser, enabled: boolean) {
+  if (isCurrentAdminUser(user) && !enabled) return;
+  try {
+    await ElMessageBox.confirm(
+      `确定${enabled ? '启用' : '禁用'}用户「${user.nickname}（${user.username}）」吗？`,
+      enabled ? '启用用户' : '禁用用户',
+      {
+        confirmButtonText: enabled ? '确认启用' : '确认禁用',
+        cancelButtonText: '返回',
+        type: 'warning',
+      },
+    );
+  } catch {
+    return;
+  }
+
+  isAdminUsersLoading.value = true;
+  adminError.value = '';
+  try {
+    await updateAdminUserEnabled(user.id, enabled);
+    await Promise.all([loadAdminUsers(), loadAdminHandlers()]);
+  } catch (error) {
+    adminError.value = error instanceof Error ? error.message : '更新用户状态失败';
+  } finally {
+    isAdminUsersLoading.value = false;
+  }
+}
+
+async function setAdminUserRole(user: AdminUser, role: 'USER' | 'ADMIN') {
+  if (isCurrentAdminUser(user) && role === 'USER') return;
+  const nextRoleLabel = roleLabel(role);
+  try {
+    await ElMessageBox.confirm(
+      `确定将用户「${user.nickname}（${user.username}）」的角色修改为「${nextRoleLabel}」吗？`,
+      '修改用户角色',
+      {
+        confirmButtonText: '确认修改',
+        cancelButtonText: '返回',
+        type: 'warning',
+      },
+    );
+  } catch {
+    return;
+  }
+
+  isAdminUsersLoading.value = true;
+  adminError.value = '';
+  try {
+    await updateAdminUserRole(user.id, role);
+    await Promise.all([loadAdminUsers(), loadAdminHandlers()]);
+  } catch (error) {
+    adminError.value = error instanceof Error ? error.message : '更新用户角色失败';
+  } finally {
+    isAdminUsersLoading.value = false;
   }
 }
 
@@ -800,8 +917,7 @@ async function openAdmin() {
   try {
     await fetchAdminOverview();
     currentView.value = 'admin';
-    await loadAdminHandlers();
-    await loadAdminWorkOrders();
+    await Promise.all([loadAdminUsers(), loadAdminHandlers(), loadAdminWorkOrders()]);
   } catch (error) {
     adminLoaded.value = false;
     adminError.value = error instanceof Error ? error.message : '获取管理页面失败';
@@ -969,6 +1085,65 @@ onMounted(() => {
           <el-alert v-if="adminError" :title="adminError" type="error" show-icon :closable="false" />
 
           <template v-if="currentView === 'admin'">
+            <section class="profile-section">
+              <div class="section-header">
+                <h3>用户管理</h3>
+                <el-button size="small" @click="loadAdminUsers()">刷新</el-button>
+              </div>
+              <el-form class="admin-user-filters" label-position="top" @submit.prevent="applyAdminUserFilters">
+                <el-form-item label="用户名或昵称">
+                  <el-input v-model="adminUserFilters.keyword" clearable placeholder="搜索用户名或昵称" @clear="applyAdminUserFilters" />
+                </el-form-item>
+                <el-button native-type="submit" type="primary">搜索</el-button>
+              </el-form>
+              <p class="item-meta">共 {{ adminUserTotal }} 个用户，第 {{ adminUserPage }} / {{ adminUserTotalPages || 1 }} 页，每页 {{ adminUserPageSize }} 个</p>
+              <p v-if="isAdminUsersLoading" class="empty-state">用户加载中</p>
+              <p v-else-if="adminUsers.length === 0" class="empty-state">暂无用户</p>
+              <div v-else class="user-management-list">
+                <article v-for="user in adminUsers" :key="user.id" class="user-management-item">
+                  <div>
+                    <strong>{{ user.nickname }}（{{ user.username }}）</strong>
+                    <span class="item-meta">
+                      {{ roleLabel(user.role) }} · {{ user.enabled ? '已启用' : '已禁用' }} · 创建于 {{ formatTime(user.createdAt) }} · 更新于 {{ formatTime(user.updatedAt) }}
+                    </span>
+                  </div>
+                  <div class="detail-actions">
+                    <el-button
+                      size="small"
+                      :type="user.enabled ? 'danger' : 'primary'"
+                      :disabled="isCurrentAdminUser(user) && user.enabled"
+                      :loading="isAdminUsersLoading"
+                      @click="setAdminUserEnabled(user, !user.enabled)"
+                    >{{ user.enabled ? '禁用' : '启用' }}</el-button>
+                    <el-button
+                      v-if="user.role === 'USER'"
+                      size="small"
+                      :loading="isAdminUsersLoading"
+                      @click="setAdminUserRole(user, 'ADMIN')"
+                    >设为管理员</el-button>
+                    <el-button
+                      v-else
+                      size="small"
+                      :disabled="isCurrentAdminUser(user)"
+                      :loading="isAdminUsersLoading"
+                      @click="setAdminUserRole(user, 'USER')"
+                    >降级为用户</el-button>
+                  </div>
+                </article>
+              </div>
+              <el-pagination
+                v-if="adminUserTotal > 0"
+                class="work-order-pagination"
+                layout="prev, pager, next, sizes"
+                :total="adminUserTotal"
+                :current-page="adminUserPage"
+                :page-size="adminUserPageSize"
+                :page-sizes="[5, 10, 20, 50]"
+                @current-change="changeAdminUserPage"
+                @size-change="changeAdminUserPageSize"
+              />
+            </section>
+
             <section class="profile-section">
               <div class="section-header">
                 <h3>&#31649;&#29702;&#21592;&#24037;&#21333;&#21015;&#34920;</h3>
