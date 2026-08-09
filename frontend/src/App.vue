@@ -7,6 +7,7 @@ import {
   fetchAdminHandlers,
   fetchAdminOverview,
   fetchAdminUsers,
+  fetchAdminWorkOrderStatistics,
   fetchAdminWorkOrders,
   returnWorkOrderToProcessing,
   submitWorkOrderForConfirmation,
@@ -14,6 +15,7 @@ import {
   updateAdminUserRole,
   type AdminHandler,
   type AdminUser,
+  type WorkOrderStatistics,
 } from './api/admin';
 import { checkBackend, checkDatabase, type HealthStatus } from './api/health';
 import {
@@ -84,6 +86,10 @@ const adminWorkOrderFilters = reactive({
   createdTo: '',
   sort: 'createdAtDesc' as 'createdAtDesc' | 'createdAtAsc',
 });
+const adminStatisticsFilters = reactive({
+  createdFrom: '',
+  createdTo: '',
+});
 const assignmentForm = reactive({ handlerId: undefined as number | undefined });
 
 const currentView = ref<View>('login');
@@ -96,6 +102,7 @@ const workOrderTotalPages = ref(0);
 const adminWorkOrders = ref<WorkOrder[]>([]);
 const adminUsers = ref<AdminUser[]>([]);
 const adminHandlers = ref<AdminHandler[]>([]);
+const workOrderStatistics = ref<WorkOrderStatistics | null>(null);
 const adminUserTotal = ref(0);
 const adminUserPage = ref(1);
 const adminUserPageSize = ref(10);
@@ -124,6 +131,7 @@ const isDetailLoading = ref(false);
 const isAdminUsersLoading = ref(false);
 const isAdminWorkOrdersLoading = ref(false);
 const isAdminHandlersLoading = ref(false);
+const isWorkOrderStatisticsLoading = ref(false);
 const isOperationLogsLoading = ref(false);
 const isCommentsLoading = ref(false);
 const isAttachmentsLoading = ref(false);
@@ -175,11 +183,29 @@ const pageTitle = computed(() => {
   if (currentView.value === 'workOrderDetail') return '工单详情';
   return '工单列表';
 });
+const hasWorkOrderStatistics = computed(() => Boolean(workOrderStatistics.value && workOrderStatistics.value.total > 0));
+const statusStatisticMax = computed(() => Math.max(1, ...(workOrderStatistics.value?.statusCounts.map((item) => item.count) ?? [])));
+const priorityStatisticMax = computed(() => Math.max(1, ...(workOrderStatistics.value?.priorityCounts.map((item) => item.count) ?? [])));
+const dailyStatisticMax = computed(() => Math.max(1, ...(workOrderStatistics.value?.dailyNewCounts.map((item) => item.count) ?? [])));
+const adminStatisticMax = computed(() => Math.max(1, ...(workOrderStatistics.value?.adminProcessingCounts.map((item) => item.count) ?? [])));
 
 function formatTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value || '无创建时间';
   return date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function formatDurationMinutes(minutes: number) {
+  if (!minutes) return '0 分钟';
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  if (hours === 0) return `${restMinutes} 分钟`;
+  if (restMinutes === 0) return `${hours} 小时`;
+  return `${hours} 小时 ${restMinutes} 分钟`;
+}
+
+function statisticBarWidth(count: number, max: number) {
+  return `${Math.round((count / max) * 100)}%`;
 }
 
 function formatFileSize(size: number) {
@@ -363,6 +389,30 @@ function changeWorkOrderPageSize(pageSize: number) {
 
 function optionalPositiveNumber(value: number | undefined) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+async function loadWorkOrderStatistics() {
+  if (!currentUser.value || !isAdmin.value) {
+    currentView.value = 'login';
+    return;
+  }
+  isWorkOrderStatisticsLoading.value = true;
+  adminError.value = '';
+  try {
+    workOrderStatistics.value = await fetchAdminWorkOrderStatistics({
+      createdFrom: adminStatisticsFilters.createdFrom,
+      createdTo: adminStatisticsFilters.createdTo,
+    });
+  } catch (error) {
+    workOrderStatistics.value = null;
+    adminError.value = error instanceof Error ? error.message : '获取工单统计失败';
+  } finally {
+    isWorkOrderStatisticsLoading.value = false;
+  }
+}
+
+function applyStatisticsFilters() {
+  void loadWorkOrderStatistics();
 }
 
 async function loadAdminHandlers() {
@@ -639,7 +689,7 @@ async function submitHandlerAssignment() {
   try {
     const updated = await assignWorkOrderHandler(workOrder.id, assignmentForm.handlerId);
     applyUpdatedWorkOrder(updated);
-    await loadOperationLogs(updated.id);
+    await Promise.all([loadOperationLogs(updated.id), loadWorkOrderStatistics()]);
     workOrderMessage.value = '处理人分配成功';
   } catch (error) {
     detailError.value = error instanceof Error ? error.message : '分配处理人失败';
@@ -746,7 +796,7 @@ async function runStateAction(
   try {
     const updated = await action();
     applyUpdatedWorkOrder(updated);
-    await loadOperationLogs(updated.id);
+    await Promise.all([loadOperationLogs(updated.id), isAdmin.value ? loadWorkOrderStatistics() : Promise.resolve()]);
     isEditingWorkOrder.value = false;
     workOrderMessage.value = success;
   } catch (error) {
@@ -889,7 +939,7 @@ async function submitWorkOrderCancellation() {
   try {
     const updated = await cancelWorkOrder(workOrder.id);
     applyUpdatedWorkOrder(updated);
-    await loadOperationLogs(updated.id);
+    await Promise.all([loadOperationLogs(updated.id), isAdmin.value ? loadWorkOrderStatistics() : Promise.resolve()]);
     isEditingWorkOrder.value = false;
     workOrderMessage.value = '工单已取消';
   } catch (error) {
@@ -917,7 +967,7 @@ async function openAdmin() {
   try {
     await fetchAdminOverview();
     currentView.value = 'admin';
-    await Promise.all([loadAdminUsers(), loadAdminHandlers(), loadAdminWorkOrders()]);
+    await Promise.all([loadWorkOrderStatistics(), loadAdminUsers(), loadAdminHandlers(), loadAdminWorkOrders()]);
   } catch (error) {
     adminLoaded.value = false;
     adminError.value = error instanceof Error ? error.message : '获取管理页面失败';
@@ -975,6 +1025,7 @@ async function logout() {
   operationLogs.value = [];
   workOrderComments.value = [];
   workOrderAttachments.value = [];
+  workOrderStatistics.value = null;
   commentForm.content = '';
   workOrdersLoaded.value = false;
   adminLoaded.value = false;
@@ -1085,6 +1136,78 @@ onMounted(() => {
           <el-alert v-if="adminError" :title="adminError" type="error" show-icon :closable="false" />
 
           <template v-if="currentView === 'admin'">
+            <section class="profile-section">
+              <div class="section-header">
+                <h3>工单统计看板</h3>
+                <el-button size="small" :loading="isWorkOrderStatisticsLoading" @click="loadWorkOrderStatistics()">刷新</el-button>
+              </div>
+              <el-form class="statistics-filters" label-position="top" @submit.prevent="applyStatisticsFilters">
+                <el-form-item label="开始日期">
+                  <el-input v-model="adminStatisticsFilters.createdFrom" type="date" clearable aria-label="统计开始日期" />
+                </el-form-item>
+                <el-form-item label="结束日期">
+                  <el-input v-model="adminStatisticsFilters.createdTo" type="date" clearable aria-label="统计结束日期" />
+                </el-form-item>
+                <el-button native-type="submit" type="primary" :loading="isWorkOrderStatisticsLoading">应用日期范围</el-button>
+              </el-form>
+              <p class="item-meta">统计口径：平均处理时长按{{ workOrderStatistics?.averageProcessingRule || '首次接单到用户确认完成' }}；超时按{{ workOrderStatistics?.overdueRule || '状态为待处理且创建时间超过 48 小时' }}。</p>
+              <p v-if="isWorkOrderStatisticsLoading" class="empty-text">工单统计加载中</p>
+              <template v-else-if="workOrderStatistics">
+                <div class="statistics-card-grid">
+                  <article class="statistics-card">
+                    <span>工单总数</span>
+                    <strong>{{ workOrderStatistics.total }}</strong>
+                  </article>
+                  <article class="statistics-card">
+                    <span>平均处理时长</span>
+                    <strong>{{ formatDurationMinutes(workOrderStatistics.averageProcessingMinutes) }}</strong>
+                  </article>
+                  <article class="statistics-card warning">
+                    <span>超时未处理</span>
+                    <strong>{{ workOrderStatistics.overdueUnhandledCount }}</strong>
+                  </article>
+                </div>
+                <p v-if="!hasWorkOrderStatistics" class="empty-text">当前日期范围内暂无工单统计数据</p>
+                <div class="statistics-charts" v-else>
+                  <section class="statistics-chart" aria-label="各状态数量">
+                    <h4>各状态数量</h4>
+                    <div v-for="item in workOrderStatistics.statusCounts" :key="item.label" class="bar-row">
+                      <span>{{ item.label }}</span>
+                      <div class="bar-track"><span class="bar-fill" :style="{ width: statisticBarWidth(item.count, statusStatisticMax) }"></span></div>
+                      <strong>{{ item.count }}</strong>
+                    </div>
+                  </section>
+                  <section class="statistics-chart" aria-label="各优先级数量">
+                    <h4>各优先级数量</h4>
+                    <div v-for="item in workOrderStatistics.priorityCounts" :key="item.label" class="bar-row">
+                      <span>{{ item.label }}</span>
+                      <div class="bar-track"><span class="bar-fill priority" :style="{ width: statisticBarWidth(item.count, priorityStatisticMax) }"></span></div>
+                      <strong>{{ item.count }}</strong>
+                    </div>
+                  </section>
+                  <section class="statistics-chart" aria-label="每日新增趋势">
+                    <h4>每日新增趋势</h4>
+                    <p v-if="workOrderStatistics.dailyNewCounts.length === 0" class="empty-text">暂无每日新增数据</p>
+                    <div v-for="item in workOrderStatistics.dailyNewCounts" :key="item.date" class="bar-row">
+                      <span>{{ item.date }}</span>
+                      <div class="bar-track"><span class="bar-fill trend" :style="{ width: statisticBarWidth(item.count, dailyStatisticMax) }"></span></div>
+                      <strong>{{ item.count }}</strong>
+                    </div>
+                  </section>
+                  <section class="statistics-chart" aria-label="各管理员处理数量">
+                    <h4>各管理员处理数量</h4>
+                    <p v-if="workOrderStatistics.adminProcessingCounts.length === 0" class="empty-text">暂无管理员处理数据</p>
+                    <div v-for="item in workOrderStatistics.adminProcessingCounts" :key="item.handlerId" class="bar-row">
+                      <span>{{ item.handlerNickname }}（{{ item.handlerUsername }}）</span>
+                      <div class="bar-track"><span class="bar-fill admin" :style="{ width: statisticBarWidth(item.count, adminStatisticMax) }"></span></div>
+                      <strong>{{ item.count }}</strong>
+                    </div>
+                  </section>
+                </div>
+              </template>
+              <p v-else class="empty-text">暂无统计数据</p>
+            </section>
+
             <section class="profile-section">
               <div class="section-header">
                 <h3>用户管理</h3>

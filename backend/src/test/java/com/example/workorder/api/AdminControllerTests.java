@@ -11,11 +11,17 @@ import com.example.workorder.auth.ForbiddenException;
 import com.example.workorder.auth.PermissionService;
 import com.example.workorder.auth.SessionKeys;
 import com.example.workorder.workorder.AdminHandlerResponse;
+import com.example.workorder.workorder.AdminWorkOrderCountResponse;
 import com.example.workorder.workorder.AssignWorkOrderRequest;
+import com.example.workorder.workorder.DailyWorkOrderCountResponse;
 import com.example.workorder.workorder.PagedWorkOrderResponse;
+import com.example.workorder.workorder.WorkOrderCountResponse;
 import com.example.workorder.workorder.WorkOrderListQuery;
 import com.example.workorder.workorder.WorkOrderResponse;
 import com.example.workorder.workorder.WorkOrderService;
+import com.example.workorder.workorder.WorkOrderStatisticsQuery;
+import com.example.workorder.workorder.WorkOrderStatisticsResponse;
+import com.example.workorder.workorder.WorkOrderStatisticsService;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -25,7 +31,7 @@ import org.springframework.mock.web.MockHttpSession;
 class AdminControllerTests {
 
     private final AdminController controller = new AdminController(
-            new PermissionService(), new WorkOrderService(null), new FakeAdminUserService());
+            new PermissionService(), new WorkOrderService(null), new FakeWorkOrderStatisticsService(), new FakeAdminUserService());
 
     @Test
     void adminCanOpenAdminOverview() {
@@ -50,7 +56,7 @@ class AdminControllerTests {
     @Test
     void adminCanListUsers() {
         FakeAdminUserService adminUserService = new FakeAdminUserService();
-        AdminController controller = new AdminController(new PermissionService(), new FakeWorkOrderService(), adminUserService);
+        AdminController controller = new AdminController(new PermissionService(), new FakeWorkOrderService(), new FakeWorkOrderStatisticsService(), adminUserService);
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(1L, "admin", "Admin", "ADMIN"));
 
@@ -61,7 +67,7 @@ class AdminControllerTests {
     @Test
     void userCannotListUsers() {
         FakeAdminUserService adminUserService = new FakeAdminUserService();
-        AdminController controller = new AdminController(new PermissionService(), new FakeWorkOrderService(), adminUserService);
+        AdminController controller = new AdminController(new PermissionService(), new FakeWorkOrderService(), new FakeWorkOrderStatisticsService(), adminUserService);
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(2L, "demo", "Demo", "USER"));
 
@@ -74,7 +80,7 @@ class AdminControllerTests {
     @Test
     void adminCanListWorkOrdersWithFilters() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeWorkOrderStatisticsService(), new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(1L, "admin", "Admin", "ADMIN"));
 
@@ -91,7 +97,7 @@ class AdminControllerTests {
     @Test
     void userCannotListAdminWorkOrders() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeWorkOrderStatisticsService(), new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(2L, "demo", "Demo", "USER"));
 
@@ -102,9 +108,40 @@ class AdminControllerTests {
     }
 
     @Test
+    void adminCanViewWorkOrderStatisticsWithDateRange() {
+        FakeWorkOrderStatisticsService statisticsService = new FakeWorkOrderStatisticsService();
+        AdminController controller = new AdminController(
+                new PermissionService(), new FakeWorkOrderService(), statisticsService, new FakeAdminUserService());
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(1L, "admin", "Admin", "ADMIN"));
+
+        WorkOrderStatisticsResponse response = controller.workOrderStatistics("2026-08-01", "2026-08-08", session);
+
+        assertThat(response.total()).isEqualTo(3);
+        assertThat(response.averageProcessingMinutes()).isEqualTo(120);
+        assertThat(response.overdueUnhandledCount()).isEqualTo(1);
+        assertThat(response.dailyNewCounts()).containsExactly(new DailyWorkOrderCountResponse(java.time.LocalDate.parse("2026-08-01"), 2));
+        assertThat(statisticsService.query).isEqualTo(new WorkOrderStatisticsQuery("2026-08-01", "2026-08-08"));
+    }
+
+    @Test
+    void userCannotViewWorkOrderStatistics() {
+        FakeWorkOrderStatisticsService statisticsService = new FakeWorkOrderStatisticsService();
+        AdminController controller = new AdminController(
+                new PermissionService(), new FakeWorkOrderService(), statisticsService, new FakeAdminUserService());
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(2L, "demo", "Demo", "USER"));
+
+        assertThatThrownBy(() -> controller.workOrderStatistics(null, null, session))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage("Access denied");
+        assertThat(statisticsService.query).isNull();
+    }
+
+    @Test
     void adminCanListEnabledHandlers() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeWorkOrderStatisticsService(), new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(1L, "admin", "Admin", "ADMIN"));
 
@@ -115,7 +152,7 @@ class AdminControllerTests {
     @Test
     void userCannotListEnabledHandlers() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeWorkOrderStatisticsService(), new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(2L, "demo", "Demo", "USER"));
 
@@ -127,7 +164,7 @@ class AdminControllerTests {
     @Test
     void adminCanAssignHandler() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeWorkOrderStatisticsService(), new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(1L, "admin", "Admin", "ADMIN"));
 
@@ -142,7 +179,7 @@ class AdminControllerTests {
     @Test
     void userCannotAssignHandler() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeWorkOrderStatisticsService(), new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(2L, "demo", "Demo", "USER"));
 
@@ -155,7 +192,7 @@ class AdminControllerTests {
     @Test
     void adminCanRunAdminStateActions() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeWorkOrderStatisticsService(), new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(1L, "admin", "Admin", "ADMIN"));
 
@@ -170,7 +207,7 @@ class AdminControllerTests {
     @Test
     void userCannotRunAdminStateActions() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
-        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeAdminUserService());
+        AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeWorkOrderStatisticsService(), new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(2L, "demo", "Demo", "USER"));
 
@@ -201,6 +238,29 @@ class AdminControllerTests {
                             Instant.parse("2026-08-07T00:00:00Z"),
                             Instant.parse("2026-08-08T00:00:00Z"))),
                     1, 2, 20, 1);
+        }
+    }
+
+    private static class FakeWorkOrderStatisticsService extends WorkOrderStatisticsService {
+        private WorkOrderStatisticsQuery query;
+
+        FakeWorkOrderStatisticsService() {
+            super(null);
+        }
+
+        @Override
+        public WorkOrderStatisticsResponse dashboard(WorkOrderStatisticsQuery query) {
+            this.query = query;
+            return new WorkOrderStatisticsResponse(
+                    3,
+                    List.of(new WorkOrderCountResponse("\u5f85\u5904\u7406", 1), new WorkOrderCountResponse("\u5df2\u5b8c\u6210", 2)),
+                    List.of(new WorkOrderCountResponse("\u9ad8", 2), new WorkOrderCountResponse("\u4e2d", 1)),
+                    List.of(new DailyWorkOrderCountResponse(java.time.LocalDate.parse("2026-08-01"), 2)),
+                    120,
+                    List.of(new AdminWorkOrderCountResponse(1L, "admin", "Admin", 2)),
+                    1,
+                    "\u9996\u6b21\u63a5\u5355\u5230\u7528\u6237\u786e\u8ba4\u5b8c\u6210",
+                    "\u72b6\u6001\u4e3a\u5f85\u5904\u7406\u4e14\u521b\u5efa\u65f6\u95f4\u8d85\u8fc7 48 \u5c0f\u65f6");
         }
     }
 

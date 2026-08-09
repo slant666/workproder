@@ -13,6 +13,9 @@ import com.example.workorder.workorder.PagedWorkOrderResponse;
 import com.example.workorder.workorder.WorkOrderListQuery;
 import com.example.workorder.workorder.WorkOrderResponse;
 import com.example.workorder.workorder.WorkOrderService;
+import com.example.workorder.workorder.WorkOrderStatisticsQuery;
+import com.example.workorder.workorder.WorkOrderStatisticsResponse;
+import com.example.workorder.workorder.WorkOrderStatisticsService;
 import jakarta.servlet.http.HttpSession;
 import java.util.List;
 import java.util.Map;
@@ -30,14 +33,17 @@ public class AdminController {
 
     private final PermissionService permissionService;
     private final WorkOrderService workOrderService;
+    private final WorkOrderStatisticsService workOrderStatisticsService;
     private final AdminUserService adminUserService;
 
     public AdminController(
             PermissionService permissionService,
             WorkOrderService workOrderService,
+            WorkOrderStatisticsService workOrderStatisticsService,
             AdminUserService adminUserService) {
         this.permissionService = permissionService;
         this.workOrderService = workOrderService;
+        this.workOrderStatisticsService = workOrderStatisticsService;
         this.adminUserService = adminUserService;
     }
 
@@ -73,6 +79,15 @@ public class AdminController {
             HttpSession session) {
         var admin = permissionService.requireAdmin(session);
         return adminUserService.updateRole(id, request, admin);
+    }
+
+    @GetMapping("/work-orders/statistics")
+    public WorkOrderStatisticsResponse workOrderStatistics(
+            @RequestParam(required = false) String createdFrom,
+            @RequestParam(required = false) String createdTo,
+            HttpSession session) {
+        permissionService.requireAdmin(session);
+        return workOrderStatisticsService.dashboard(new WorkOrderStatisticsQuery(createdFrom, createdTo));
     }
 
     @GetMapping("/work-orders")

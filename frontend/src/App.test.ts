@@ -35,6 +35,40 @@ const handlers = [
   { id: 2, username: 'admin', nickname: 'Admin' },
   { id: 3, username: 'handler', nickname: 'Handler' },
 ];
+const workOrderStatistics = {
+  total: 3,
+  statusCounts: [
+    { label: '待处理', count: 1 },
+    { label: '处理中', count: 1 },
+    { label: '待确认', count: 0 },
+    { label: '已完成', count: 1 },
+    { label: '已取消', count: 0 },
+  ],
+  priorityCounts: [
+    { label: '低', count: 0 },
+    { label: '中', count: 1 },
+    { label: '高', count: 2 },
+  ],
+  dailyNewCounts: [
+    { date: '2026-08-07', count: 2 },
+    { date: '2026-08-08', count: 1 },
+  ],
+  averageProcessingMinutes: 135,
+  adminProcessingCounts: [{ handlerId: 2, handlerUsername: 'admin', handlerNickname: 'Admin', count: 2 }],
+  overdueUnhandledCount: 1,
+  averageProcessingRule: '首次接单到用户确认完成',
+  overdueRule: '状态为待处理且创建时间超过 48 小时',
+};
+const emptyWorkOrderStatistics = {
+  ...workOrderStatistics,
+  total: 0,
+  statusCounts: workOrderStatistics.statusCounts.map((item) => ({ ...item, count: 0 })),
+  priorityCounts: workOrderStatistics.priorityCounts.map((item) => ({ ...item, count: 0 })),
+  dailyNewCounts: [],
+  averageProcessingMinutes: 0,
+  adminProcessingCounts: [],
+  overdueUnhandledCount: 0,
+};
 const operationLogs = [
   {
     id: 1,
@@ -103,7 +137,7 @@ function mountApp() {
   return mount(App, { global: { plugins: [ElementPlus] } });
 }
 
-function mockApi(currentUser: unknown = null, orders: unknown[] = []) {
+function mockApi(currentUser: unknown = null, orders: unknown[] = [], statisticsResponse: unknown = workOrderStatistics) {
   const detailOrder = orders.find((order) => (order as { id?: number }).id === 10) || workOrder;
   vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
     const url = input.toString();
@@ -127,6 +161,7 @@ function mockApi(currentUser: unknown = null, orders: unknown[] = []) {
     if (url.startsWith('/api/admin/users') && method === 'GET') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse(paged(adminUserRows)) : okResponse({ message: 'Access denied' }, 403);
     if (url === '/api/admin/users/1/enabled' && method === 'PUT') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse({ ...adminUserRows[1], enabled: JSON.parse(init?.body as string).enabled }) : okResponse({ message: 'Access denied' }, 403);
     if (url === '/api/admin/users/1/role' && method === 'PUT') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse({ ...adminUserRows[1], role: JSON.parse(init?.body as string).role }) : okResponse({ message: 'Access denied' }, 403);
+    if (url.startsWith('/api/admin/work-orders/statistics') && method === 'GET') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse(statisticsResponse) : okResponse({ message: 'Access denied' }, 403);
     if (url.startsWith('/api/admin/work-orders') && method === 'GET') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse(paged(orders)) : okResponse({ message: 'Access denied' }, 403);
     if (url === '/api/admin/work-orders/10/handler' && method === 'PUT') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse({ ...workOrder, handlerId: 3, handlerUsername: 'handler' }) : okResponse({ message: 'Access denied' }, 403);
     if (url === '/api/admin/work-orders/10/accept' && method === 'PUT') return okResponse({ ...workOrder, status: '处理中', handlerId: 2, handlerUsername: 'admin' });
@@ -138,8 +173,8 @@ function mockApi(currentUser: unknown = null, orders: unknown[] = []) {
   });
 }
 
-async function mountWithApi(currentUser: unknown = null, orders: unknown[] = []) {
-  mockApi(currentUser, orders);
+async function mountWithApi(currentUser: unknown = null, orders: unknown[] = [], statisticsResponse: unknown = workOrderStatistics) {
+  mockApi(currentUser, orders, statisticsResponse);
   const wrapper = mountApp();
   await flushPromises();
   return wrapper;
@@ -192,8 +227,56 @@ describe('App', () => {
 
     expect(wrapper.text()).toContain('\u7ba1\u7406\u5458\u5de5\u5355\u5217\u8868');
     expect(wrapper.text()).toContain(workOrder.title);
-    const adminListCall = vi.mocked(globalThis.fetch).mock.calls.find(([url]) => url.toString().startsWith('/api/admin/work-orders'));
+    const adminListCall = vi.mocked(globalThis.fetch).mock.calls.find(([url]) =>
+      url.toString().startsWith('/api/admin/work-orders') && !url.toString().startsWith('/api/admin/work-orders/statistics'),
+    );
     expect(adminListCall).toBeTruthy();
+  });
+
+  it('loads work order statistics when opening the admin page', async () => {
+    const wrapper = await mountWithApi(admin, [workOrder]);
+    await wrapper.findAll('button').find((button) => button.text() === '\u7ba1\u7406')!.trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('工单统计看板');
+    expect(wrapper.text()).toContain('工单总数');
+    expect(wrapper.text()).toContain('平均处理时长');
+    expect(wrapper.text()).toContain('2 小时 15 分钟');
+    expect(wrapper.text()).toContain('超时未处理');
+    expect(wrapper.text()).toContain('每日新增趋势');
+    expect(wrapper.text()).toContain('各管理员处理数量');
+    const statisticsCall = vi.mocked(globalThis.fetch).mock.calls.find(([url]) =>
+      url.toString().startsWith('/api/admin/work-orders/statistics'),
+    );
+    expect(statisticsCall).toBeTruthy();
+  });
+
+  it('requests work order statistics with date range', async () => {
+    const wrapper = await mountWithApi(admin, [workOrder]);
+    await wrapper.findAll('button').find((button) => button.text() === '\u7ba1\u7406')!.trigger('click');
+    await flushPromises();
+
+    const statisticsForm = wrapper.find('.statistics-filters');
+    const inputs = statisticsForm.findAll('input');
+    await inputs[0]!.setValue('2026-08-01');
+    await inputs[1]!.setValue('2026-08-08');
+    await statisticsForm.trigger('submit');
+    await flushPromises();
+
+    const statisticsCall = vi.mocked(globalThis.fetch).mock.calls
+      .map(([url]) => url.toString())
+      .find((url) => url.startsWith('/api/admin/work-orders/statistics?'));
+    expect(statisticsCall).toContain('createdFrom=2026-08-01');
+    expect(statisticsCall).toContain('createdTo=2026-08-08');
+  });
+
+  it('shows empty state when work order statistics has no data', async () => {
+    const wrapper = await mountWithApi(admin, [], emptyWorkOrderStatistics);
+    await wrapper.findAll('button').find((button) => button.text() === '\u7ba1\u7406')!.trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('当前日期范围内暂无工单统计数据');
+    expect(wrapper.text()).toContain('0 分钟');
   });
 
   it('loads admin users when opening the admin page', async () => {

@@ -7,6 +7,40 @@ export interface AdminWorkOrderListQuery extends WorkOrderListQuery {
   createdTo?: string;
 }
 
+export interface AdminWorkOrderStatisticsQuery {
+  createdFrom?: string;
+  createdTo?: string;
+}
+
+export interface WorkOrderCountStatistic {
+  label: string;
+  count: number;
+}
+
+export interface DailyWorkOrderCountStatistic {
+  date: string;
+  count: number;
+}
+
+export interface AdminWorkOrderCountStatistic {
+  handlerId: number;
+  handlerUsername: string;
+  handlerNickname: string;
+  count: number;
+}
+
+export interface WorkOrderStatistics {
+  total: number;
+  statusCounts: WorkOrderCountStatistic[];
+  priorityCounts: WorkOrderCountStatistic[];
+  dailyNewCounts: DailyWorkOrderCountStatistic[];
+  averageProcessingMinutes: number;
+  adminProcessingCounts: AdminWorkOrderCountStatistic[];
+  overdueUnhandledCount: number;
+  averageProcessingRule: string;
+  overdueRule: string;
+}
+
 export interface AdminHandler {
   id: number;
   username: string;
@@ -124,6 +158,26 @@ export async function updateAdminUserRole(id: number, role: 'USER' | 'ADMIN'): P
   }
 
   return response.json() as Promise<AdminUser>;
+}
+
+export async function fetchAdminWorkOrderStatistics(query: AdminWorkOrderStatisticsQuery = {}): Promise<WorkOrderStatistics> {
+  const params = new URLSearchParams();
+  if (query.createdFrom) params.set('createdFrom', query.createdFrom);
+  if (query.createdTo) params.set('createdTo', query.createdTo);
+  const url = params.size > 0 ? `/api/admin/work-orders/statistics?${params.toString()}` : '/api/admin/work-orders/statistics';
+  const response = await fetch(url);
+
+  if (response.status === 401) {
+    throw new Error('\u8bf7\u5148\u767b\u5f55');
+  }
+  if (response.status === 403) {
+    throw new Error(await readAdminError(response, 'Access denied'));
+  }
+  if (!response.ok) {
+    throw new Error(await readAdminError(response, '\u83b7\u53d6\u5de5\u5355\u7edf\u8ba1\u5931\u8d25'));
+  }
+
+  return response.json() as Promise<WorkOrderStatistics>;
 }
 
 export async function fetchAdminWorkOrders(query: AdminWorkOrderListQuery = {}): Promise<PagedWorkOrders> {

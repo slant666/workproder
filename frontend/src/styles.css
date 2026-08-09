@@ -194,12 +194,102 @@ h2 {
 }
 
 .admin-work-order-filters,
-.admin-user-filters {
+.admin-user-filters,
+.statistics-filters {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: end;
   gap: 10px 12px;
   margin: 16px 0 12px;
+}
+
+.statistics-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0 16px;
+}
+
+.statistics-card {
+  padding: 14px 16px;
+  border: 1px solid #d8dee8;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.statistics-card span {
+  display: block;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.statistics-card strong {
+  display: block;
+  margin-top: 6px;
+  color: #111827;
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.statistics-card.warning strong {
+  color: #b45309;
+}
+
+.statistics-charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.statistics-chart {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #d8dee8;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.statistics-chart h4 {
+  margin: 0 0 12px;
+  color: #111827;
+  font-size: 15px;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(80px, 120px) 1fr 36px;
+  gap: 10px;
+  align-items: center;
+  margin: 8px 0;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.bar-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5e7eb;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: #409eff;
+}
+
+.bar-fill.priority {
+  background: #67c23a;
+}
+
+.bar-fill.trend {
+  background: #7c3aed;
+}
+
+.bar-fill.admin {
+  background: #f59e0b;
 }
 
 .user-management-list {
@@ -253,7 +343,8 @@ h2 {
 }
 
 .item-meta,
-.empty-state {
+.empty-state,
+.empty-text {
   color: #6b7280;
   line-height: 1.6;
 }
@@ -438,7 +529,11 @@ h2 {
     grid-template-columns: 1fr;
   }
 
-  .admin-work-order-filters {
+  .admin-work-order-filters,
+  .admin-user-filters,
+  .statistics-filters,
+  .statistics-card-grid,
+  .statistics-charts {
     grid-template-columns: 1fr;
   }
 

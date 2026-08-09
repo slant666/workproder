@@ -2,75 +2,63 @@
 
 ## Current Task
 
-T018: 管理员用户管理
+T019: 工单统计看板
 
 ## Status
 
-Implementation complete. The backend compile issue reported in `AdminUserServiceTests` has been fixed. Commit-and-push is blocked because Git commands are not returning through the local shell transport.
+Implementation complete. The reported backend compile error in `WorkOrderStatisticsService` was fixed. The later Spring Boot startup failure caused by `No default constructor found` was also fixed by marking the production `JdbcTemplate` constructor with `@Autowired` while preserving the package-private test constructor that injects `Clock`. No required implementation steps remain.
 
 ## Branch
 
-- `codex/t018-admin-user-management`
+- Current workspace is on `main`, tracking `origin/main`.
+- T019 was implemented and is ready to commit from `main`.
 
 ## Completed Work
 
-- Added dedicated user-management audit logging:
-  - `user_management_audit_logs`
-  - records actor, target user, action, changed field, old value, new value, optional details, and creation time.
-- Added backend user-management DTOs and query/request models:
-  - `AdminUserResponse`
-  - `PagedAdminUserResponse`
-  - `AdminUserListQuery`
-  - `UpdateUserEnabledRequest`
-  - `UpdateUserRoleRequest`
-  - `AdminUserException`
-- Added `AdminUserService` for identity-domain user management:
-  - admin user list with keyword search;
-  - pagination normalization and page-size boundary;
-  - enable/disable users;
-  - promote users to admin and downgrade admins to user;
-  - self-disable and self-downgrade protection;
-  - audit-log writes for real management changes.
-- Extended admin API endpoints:
-  - `GET /api/admin/users`
-  - `PUT /api/admin/users/{id}/enabled`
-  - `PUT /api/admin/users/{id}/role`
-- Kept user deletion out of the API so users linked to business data are not physically deleted.
-- Preserved disabled-user login protection in `AuthService`.
-- Extended frontend admin API:
-  - `AdminUser`
-  - `PagedAdminUsers`
-  - `AdminUserListQuery`
-  - `fetchAdminUsers`
-  - `updateAdminUserEnabled`
-  - `updateAdminUserRole`
-- Added admin user-management UI:
-  - user list;
-  - search;
-  - pagination;
-  - enable/disable actions;
-  - promote/downgrade actions;
-  - second confirmation before role changes;
-  - current-admin self disable/downgrade actions disabled;
-  - refreshes handlers after user status or role changes.
-- Added backend tests for authorization, pagination boundaries, self-operation protection, role/status changes, audit logging, and disabled login behavior.
-- Added frontend tests for admin user loading, search, pagination, role-change confirmation cancellation, self-operation disabled buttons, and enable/disable refresh flow.
+- Added an admin-only work-order statistics API:
+  - `GET /api/admin/work-orders/statistics`
+  - supports `createdFrom` and `createdTo` date range query parameters.
+- Added backend statistics calculation in a dedicated service rather than overloading the paged list query.
+- Defined statistics rules:
+  - average processing duration = first admin accept time to user confirmation completion time;
+  - overdue unhandled count = work orders still in `待处理` after 48 hours from creation.
+- Added statistics output for:
+  - total work orders;
+  - counts by status;
+  - counts by priority;
+  - daily new work-order trend;
+  - average processing duration in minutes;
+  - counts by current admin handler;
+  - overdue unhandled count;
+  - rule text returned with the response for UI transparency.
+- Added database performance support for statistics joins:
+  - index on `work_order_status_transitions(new_status, action, work_order_id)`.
+- Added frontend admin dashboard:
+  - date range filters;
+  - summary cards;
+  - simple horizontal bar charts;
+  - empty-state display when the selected range has no data;
+  - refresh behavior after relevant work-order state changes.
+- Added/updated tests:
+  - backend service aggregation tests;
+  - backend admin controller authorization and date-range parameter tests;
+  - frontend admin statistics rendering, date-range request, and empty-state tests.
+- Fixed backend issues reported during startup:
+  - `WorkOrderStatisticsService.groupedCounts` uses explicit `RowCallbackHandler` for `JdbcTemplate.query` to avoid overload ambiguity.
+  - `WorkOrderStatisticsService(JdbcTemplate)` is annotated with `@Autowired` so Spring selects it instead of looking for a no-arg constructor.
 
 ## Changed Files
 
 - `backend/src/main/java/com/example/workorder/api/AdminController.java`
-- `backend/src/main/java/com/example/workorder/api/ApiExceptionHandler.java`
-- `backend/src/main/java/com/example/workorder/auth/AdminUserException.java`
-- `backend/src/main/java/com/example/workorder/auth/AdminUserListQuery.java`
-- `backend/src/main/java/com/example/workorder/auth/AdminUserResponse.java`
-- `backend/src/main/java/com/example/workorder/auth/AdminUserService.java`
-- `backend/src/main/java/com/example/workorder/auth/PagedAdminUserResponse.java`
-- `backend/src/main/java/com/example/workorder/auth/UpdateUserEnabledRequest.java`
-- `backend/src/main/java/com/example/workorder/auth/UpdateUserRoleRequest.java`
-- `backend/src/main/resources/db/migration/V11__create_user_management_audit_logs.sql`
+- `backend/src/main/java/com/example/workorder/workorder/AdminWorkOrderCountResponse.java`
+- `backend/src/main/java/com/example/workorder/workorder/DailyWorkOrderCountResponse.java`
+- `backend/src/main/java/com/example/workorder/workorder/WorkOrderCountResponse.java`
+- `backend/src/main/java/com/example/workorder/workorder/WorkOrderStatisticsQuery.java`
+- `backend/src/main/java/com/example/workorder/workorder/WorkOrderStatisticsResponse.java`
+- `backend/src/main/java/com/example/workorder/workorder/WorkOrderStatisticsService.java`
+- `backend/src/main/resources/db/migration/V12__add_work_order_statistics_indexes.sql`
 - `backend/src/test/java/com/example/workorder/api/AdminControllerTests.java`
-- `backend/src/test/java/com/example/workorder/auth/AdminUserServiceTests.java`
-- `backend/src/test/java/com/example/workorder/auth/AuthServiceTests.java`
+- `backend/src/test/java/com/example/workorder/workorder/WorkOrderStatisticsServiceTests.java`
 - `frontend/src/App.test.ts`
 - `frontend/src/App.vue`
 - `frontend/src/api/admin.ts`
@@ -79,15 +67,21 @@ Implementation complete. The backend compile issue reported in `AdminUserService
 
 ## Verification
 
-- `backend`: fixed the `AdminUserServiceTests` compile error caused by calling `updateRole` without the required `CurrentUser actor` argument.
-- `backend`: `ReadLints` reported no diagnostics for `AdminUserServiceTests.java` after the fix.
-- `backend`: full `mvn.cmd test` re-run could not be confirmed because the execution channel returned a shell stream error after the fix.
-- `frontend`: `ReadLints` reported no diagnostics for edited frontend files.
-- `frontend`: `npm.cmd run test -- --run` could not be confirmed because the local terminal transport repeatedly closed with `Missing terminal shell stream event` before returning output.
-- `git`: commit-and-push could not be completed from the agent. `git status --short --branch` did not return through the local shell transport; an isolated shell attempt also returned a shell stream event error.
-- `shell`: even `cmd.exe /c ver` fails with the same `Missing terminal shell stream event`, so the blocker is Cursor agent shell transport rather than repository-specific Git state.
+- `ReadLints` on `WorkOrderStatisticsService.java` returned no diagnostics.
+- User-side logs confirmed Flyway reached schema version 12 successfully before the constructor selection failure.
+- Previous attempts were blocked from agent shell before Cursor setting/restart:
+  - `mvn test`
+  - `npm run test -- --run`
+  - `mvn test-compile`
+- 2026-08-09 shell-channel diagnosis: agent-side minimal `pwd` failed with `Missing terminal shell stream event`; terminal records showed `pwd`, `git status`, and `git fetch` all failed within ~14-23ms. This pointed to Cursor local shell transport/bridge failure, not project path, Git, Maven, Node, or permissions.
+- 2026-08-09 after enabling the legacy terminal tool and restarting Cursor, agent shell recovered:
+  - `echo hello` succeeded.
+  - `pwd` succeeded in `D:\CodexWork\projects\work-order-system\backend`.
+  - `mvn --version` succeeded with Maven 3.9.9 and Java 21.0.5.
+  - `mvn test-compile` from `backend` succeeded with `BUILD SUCCESS`.
 
 ## Notes
 
-- The current branch was created as `codex/t018-admin-user-management`.
-- No delete-user endpoint was added by design; disabling is the supported administrative action.
+- Query performance was handled by using grouped SQL aggregations on indexed `work_orders` columns (`created_at`, `status`, `priority`, `handler_id`) and by adding a transition-table index for accept/completion lookup.
+- `adminProcessingCounts` currently means count by current `work_orders.handler_id`. Historical multi-handler attribution is not calculated because the current domain model does not store a final/primary completed handler separately.
+- Follow-up command for user: run `mvn spring-boot:run` from `D:\CodexWork\projects\work-order-system\backend`.
