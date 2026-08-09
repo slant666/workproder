@@ -193,12 +193,35 @@ h2 {
   margin: 16px 0 12px;
 }
 
-.admin-work-order-filters {
+.admin-work-order-filters,
+.admin-user-filters {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: end;
   gap: 10px 12px;
   margin: 16px 0 12px;
+}
+
+.user-management-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.user-management-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.user-management-item strong,
+.user-management-item .item-meta {
+  display: block;
 }
 
 .work-order-pagination {

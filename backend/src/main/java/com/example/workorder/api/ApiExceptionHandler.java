@@ -1,5 +1,6 @@
 package com.example.workorder.api;
 
+import com.example.workorder.auth.AdminUserException;
 import com.example.workorder.auth.AuthException;
 import com.example.workorder.auth.ForbiddenException;
 import com.example.workorder.auth.RegistrationException;
@@ -36,6 +37,12 @@ public class ApiExceptionHandler {
     @ExceptionHandler(AuthException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Map<String, String> auth(AuthException ex) {
+        return Map.of("message", ex.getMessage());
+    }
+
+    @ExceptionHandler(AdminUserException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Map<String, String> adminUser(AdminUserException ex) {
         return Map.of("message", ex.getMessage());
     }
 

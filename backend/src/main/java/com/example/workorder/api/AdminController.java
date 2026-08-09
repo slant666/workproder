@@ -1,6 +1,12 @@
 package com.example.workorder.api;
 
+import com.example.workorder.auth.AdminUserListQuery;
+import com.example.workorder.auth.AdminUserResponse;
+import com.example.workorder.auth.AdminUserService;
+import com.example.workorder.auth.PagedAdminUserResponse;
 import com.example.workorder.auth.PermissionService;
+import com.example.workorder.auth.UpdateUserEnabledRequest;
+import com.example.workorder.auth.UpdateUserRoleRequest;
 import com.example.workorder.workorder.AdminHandlerResponse;
 import com.example.workorder.workorder.AssignWorkOrderRequest;
 import com.example.workorder.workorder.PagedWorkOrderResponse;
@@ -24,16 +30,49 @@ public class AdminController {
 
     private final PermissionService permissionService;
     private final WorkOrderService workOrderService;
+    private final AdminUserService adminUserService;
 
-    public AdminController(PermissionService permissionService, WorkOrderService workOrderService) {
+    public AdminController(
+            PermissionService permissionService,
+            WorkOrderService workOrderService,
+            AdminUserService adminUserService) {
         this.permissionService = permissionService;
         this.workOrderService = workOrderService;
+        this.adminUserService = adminUserService;
     }
 
     @GetMapping("/overview")
     public Map<String, Object> overview(HttpSession session) {
         permissionService.requireAdmin(session);
         return Map.of("status", "ok", "area", "admin");
+    }
+
+    @GetMapping("/users")
+    public PagedAdminUserResponse users(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer pageSize,
+            HttpSession session) {
+        permissionService.requireAdmin(session);
+        return adminUserService.list(new AdminUserListQuery(keyword, page, pageSize));
+    }
+
+    @PutMapping("/users/{id}/enabled")
+    public AdminUserResponse updateUserEnabled(
+            @PathVariable Long id,
+            @RequestBody UpdateUserEnabledRequest request,
+            HttpSession session) {
+        var admin = permissionService.requireAdmin(session);
+        return adminUserService.updateEnabled(id, request, admin);
+    }
+
+    @PutMapping("/users/{id}/role")
+    public AdminUserResponse updateUserRole(
+            @PathVariable Long id,
+            @RequestBody UpdateUserRoleRequest request,
+            HttpSession session) {
+        var admin = permissionService.requireAdmin(session);
+        return adminUserService.updateRole(id, request, admin);
     }
 
     @GetMapping("/work-orders")

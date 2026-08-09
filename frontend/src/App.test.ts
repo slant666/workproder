@@ -14,6 +14,10 @@ const paged = (items: unknown[], overrides: Partial<{ total: number; page: numbe
 });
 const user = { id: 1, username: 'demo', nickname: '演示用户', role: 'USER' };
 const admin = { id: 2, username: 'admin', nickname: '管理员', role: 'ADMIN' };
+const adminUserRows = [
+  { ...admin, enabled: true, createdAt: '2026-08-07T00:00:00Z', updatedAt: '2026-08-07T00:00:00Z' },
+  { ...user, enabled: true, createdAt: '2026-08-07T01:00:00Z', updatedAt: '2026-08-07T01:00:00Z' },
+];
 const workOrder = {
   id: 10,
   title: '打印机故障',
@@ -120,6 +124,9 @@ function mockApi(currentUser: unknown = null, orders: unknown[] = []) {
     if (url.startsWith('/api/work-orders') && method === 'GET') return currentUser ? okResponse(paged(orders)) : okResponse({ message: '请先登录' }, 401);
     if (url === '/api/admin/overview') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse({ status: 'ok', area: 'admin' }) : okResponse({ message: 'Access denied' }, 403);
     if (url === '/api/admin/handlers') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse(handlers) : okResponse({ message: 'Access denied' }, 403);
+    if (url.startsWith('/api/admin/users') && method === 'GET') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse(paged(adminUserRows)) : okResponse({ message: 'Access denied' }, 403);
+    if (url === '/api/admin/users/1/enabled' && method === 'PUT') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse({ ...adminUserRows[1], enabled: JSON.parse(init?.body as string).enabled }) : okResponse({ message: 'Access denied' }, 403);
+    if (url === '/api/admin/users/1/role' && method === 'PUT') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse({ ...adminUserRows[1], role: JSON.parse(init?.body as string).role }) : okResponse({ message: 'Access denied' }, 403);
     if (url.startsWith('/api/admin/work-orders') && method === 'GET') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse(paged(orders)) : okResponse({ message: 'Access denied' }, 403);
     if (url === '/api/admin/work-orders/10/handler' && method === 'PUT') return currentUser && (currentUser as { role?: string }).role === 'ADMIN' ? okResponse({ ...workOrder, handlerId: 3, handlerUsername: 'handler' }) : okResponse({ message: 'Access denied' }, 403);
     if (url === '/api/admin/work-orders/10/accept' && method === 'PUT') return okResponse({ ...workOrder, status: '处理中', handlerId: 2, handlerUsername: 'admin' });
@@ -187,6 +194,100 @@ describe('App', () => {
     expect(wrapper.text()).toContain(workOrder.title);
     const adminListCall = vi.mocked(globalThis.fetch).mock.calls.find(([url]) => url.toString().startsWith('/api/admin/work-orders'));
     expect(adminListCall).toBeTruthy();
+  });
+
+  it('loads admin users when opening the admin page', async () => {
+    const wrapper = await mountWithApi(admin, [workOrder]);
+    await wrapper.findAll('button').find((button) => button.text() === '\u7ba1\u7406')!.trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('用户管理');
+    expect(wrapper.text()).toContain('管理员（admin）');
+    expect(wrapper.text()).toContain('演示用户（demo）');
+    const userListCall = vi.mocked(globalThis.fetch).mock.calls
+      .map(([url]) => url.toString())
+      .find((url) => url.startsWith('/api/admin/users?'));
+    expect(userListCall).toContain('page=1');
+    expect(userListCall).toContain('pageSize=10');
+  });
+
+  it('requests filtered admin users from the first page', async () => {
+    const wrapper = await mountWithApi(admin, [workOrder]);
+    await wrapper.findAll('button').find((button) => button.text() === '\u7ba1\u7406')!.trigger('click');
+    await flushPromises();
+
+    const filterForm = wrapper.find('.admin-user-filters');
+    await filterForm.find('input')!.setValue('demo');
+    await filterForm.trigger('submit');
+    await flushPromises();
+
+    const userListCall = [...vi.mocked(globalThis.fetch).mock.calls]
+      .reverse()
+      .map(([url]) => url.toString())
+      .find((url) => url.startsWith('/api/admin/users?'));
+    expect(userListCall).toContain('keyword=demo');
+    expect(userListCall).toContain('page=1');
+    expect(userListCall).toContain('pageSize=10');
+  });
+
+  it('requests the selected admin user page', async () => {
+    const wrapper = await mountWithApi(admin, [workOrder]);
+    await wrapper.findAll('button').find((button) => button.text() === '\u7ba1\u7406')!.trigger('click');
+    await flushPromises();
+
+    const pagination = wrapper.findAllComponents({ name: 'ElPagination' })[0]!;
+    pagination.vm.$emit('current-change', 2);
+    await flushPromises();
+
+    const userListCall = [...vi.mocked(globalThis.fetch).mock.calls]
+      .reverse()
+      .map(([url]) => url.toString())
+      .find((url) => url.startsWith('/api/admin/users?'));
+    expect(userListCall).toContain('page=2');
+    expect(userListCall).toContain('pageSize=10');
+  });
+
+  it('requires confirmation before changing an admin user role and respects cancellation', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('cancel') as never);
+    const wrapper = await mountWithApi(admin, [workOrder]);
+    await wrapper.findAll('button').find((button) => button.text() === '\u7ba1\u7406')!.trigger('click');
+    await flushPromises();
+
+    await wrapper.findAll('.user-management-item button').find((button) => button.text() === '设为管理员')!.trigger('click');
+    await flushPromises();
+
+    expect(ElMessageBox.confirm).toHaveBeenCalled();
+    const roleUpdateCall = vi.mocked(globalThis.fetch).mock.calls.find(([url, init]) => url.toString() === '/api/admin/users/1/role' && init?.method === 'PUT');
+    expect(roleUpdateCall).toBeFalsy();
+  });
+
+  it('prevents disabling or downgrading the current admin in the UI', async () => {
+    const wrapper = await mountWithApi(admin, [workOrder]);
+    await wrapper.findAll('button').find((button) => button.text() === '\u7ba1\u7406')!.trigger('click');
+    await flushPromises();
+
+    const selfButtons = wrapper.findAll('.user-management-item')[0]!.findAll('button');
+    const disableSelfButton = selfButtons.find((button) => button.text() === '禁用')!;
+    const downgradeSelfButton = selfButtons.find((button) => button.text() === '降级为用户')!;
+    expect(disableSelfButton.attributes('disabled')).toBeDefined();
+    expect(downgradeSelfButton.attributes('disabled')).toBeDefined();
+  });
+
+  it('updates user enabled state after confirmation and refreshes admin users', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({ action: 'confirm' } as never);
+    const wrapper = await mountWithApi(admin, [workOrder]);
+    await wrapper.findAll('button').find((button) => button.text() === '\u7ba1\u7406')!.trigger('click');
+    await flushPromises();
+
+    const enabledUserButtons = wrapper.findAll('.user-management-item')[1]!.findAll('button');
+    await enabledUserButtons.find((button) => button.text() === '禁用')!.trigger('click');
+    await flushPromises();
+
+    const enabledUpdateCall = vi.mocked(globalThis.fetch).mock.calls.find(([url, init]) => url.toString() === '/api/admin/users/1/enabled' && init?.method === 'PUT');
+    expect(enabledUpdateCall).toBeTruthy();
+    expect(JSON.parse(enabledUpdateCall![1]!.body as string)).toEqual({ enabled: false });
+    const userListCalls = vi.mocked(globalThis.fetch).mock.calls.filter(([url, init]) => url.toString().startsWith('/api/admin/users') && (init?.method || 'GET') === 'GET');
+    expect(userListCalls.length).toBeGreaterThanOrEqual(2);
   });
 
   it('requests filtered admin work orders from the first page', async () => {
