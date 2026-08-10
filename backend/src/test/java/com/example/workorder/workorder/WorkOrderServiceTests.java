@@ -245,6 +245,34 @@ class WorkOrderServiceTests {
     }
 
     @Test
+    void rejectsBlankTypeAndPriorityOnCreateAndUpdate() {
+        CurrentUser currentUser = new CurrentUser(1L, "demo", "Demo", "USER");
+
+        assertThatThrownBy(() -> workOrderService.create(
+                new CreateWorkOrderRequest("Printer", "Cannot print", " ", "中"),
+                currentUser))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("工单类型不能为空");
+        assertThatThrownBy(() -> workOrderService.create(
+                new CreateWorkOrderRequest("Printer", "Cannot print", "Device", null),
+                currentUser))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("优先级不能为空");
+        assertThatThrownBy(() -> workOrderService.update(
+                1L,
+                new UpdateWorkOrderRequest("Printer", "Cannot print", "", "中"),
+                currentUser))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("工单类型不能为空");
+        assertThatThrownBy(() -> workOrderService.update(
+                1L,
+                new UpdateWorkOrderRequest("Printer", "Cannot print", "Device", " "),
+                currentUser))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("优先级不能为空");
+    }
+
+    @Test
     void regularUserCannotUpdateOthersWorkOrder() {
         CurrentUser currentUser = new CurrentUser(1L, "demo", "演示用户", "USER");
 
@@ -543,6 +571,47 @@ class WorkOrderServiceTests {
     }
 
     @Test
+    void assignedWorkOrderCanOnlyBeAcceptedOrSubmittedByAssignedHandler() {
+        CurrentUser admin = new CurrentUser(3L, "admin", "Admin", "ADMIN");
+        CurrentUser handler = new CurrentUser(4L, "handler", "Handler", "ADMIN");
+
+        workOrderService.assignHandler(1L, new AssignWorkOrderRequest(4L), admin);
+
+        assertThatThrownBy(() -> workOrderService.accept(1L, admin))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage("Access denied");
+
+        workOrderService.accept(1L, handler);
+
+        assertThatThrownBy(() -> workOrderService.submitForConfirmation(1L, admin))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage("Access denied");
+    }
+
+    @Test
+    void missingWorkOrderOperationsReturnUnderstandableNotFoundErrors() {
+        CurrentUser owner = new CurrentUser(1L, "demo", "Demo", "USER");
+        CurrentUser admin = new CurrentUser(3L, "admin", "Admin", "ADMIN");
+        UpdateWorkOrderRequest update = new UpdateWorkOrderRequest("Printer", "Cannot print", "Device", "中");
+
+        assertThatThrownBy(() -> workOrderService.update(404L, update, owner))
+                .isInstanceOf(WorkOrderNotFoundException.class)
+                .hasMessage("工单不存在");
+        assertThatThrownBy(() -> workOrderService.cancel(404L, owner))
+                .isInstanceOf(WorkOrderNotFoundException.class)
+                .hasMessage("工单不存在");
+        assertThatThrownBy(() -> workOrderService.accept(404L, admin))
+                .isInstanceOf(WorkOrderNotFoundException.class)
+                .hasMessage("工单不存在");
+        assertThatThrownBy(() -> workOrderService.assignHandler(404L, new AssignWorkOrderRequest(4L), admin))
+                .isInstanceOf(WorkOrderNotFoundException.class)
+                .hasMessage("工单不存在");
+        assertThatThrownBy(() -> workOrderService.listVisibleComments(404L, owner))
+                .isInstanceOf(WorkOrderNotFoundException.class)
+                .hasMessage("工单不存在");
+    }
+
+    @Test
     void skipsUpdateLogsWhenFieldsDoNotChange() {
         CurrentUser creator = new CurrentUser(1L, "demo", "Demo", "USER");
         WorkOrderResponse existing = workOrderService.getVisibleDetail(1L, creator);
@@ -629,5 +698,16 @@ class WorkOrderServiceTests {
         assertThat(workOrderService.listVisibleOperationLogs(1L, owner))
                 .extracting(WorkOrderOperationLogResponse::action)
                 .containsExactly("comment_add", "comment_delete");
+    }
+
+    @Test
+    void deletingMissingCommentDoesNotWriteDeletionLog() {
+        CurrentUser admin = new CurrentUser(3L, "admin", "Admin", "ADMIN");
+
+        assertThatThrownBy(() -> workOrderService.deleteComment(1L, 404L, admin))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("评论不存在");
+
+        assertThat(workOrderService.listVisibleOperationLogs(1L, admin)).isEmpty();
     }
 }

@@ -173,6 +173,42 @@ class WorkOrderAttachmentServiceTests {
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM work_order_attachments", Long.class)).isZero();
     }
 
+    @Test
+    void rejectsEmptyOrInvalidAttachmentNamesBeforeWritingFiles() throws Exception {
+        CurrentUser owner = new CurrentUser(1L, "demo", "Demo", "USER");
+
+        assertThatThrownBy(() -> attachmentService.upload(1L, png("empty.png", new byte[0]), owner))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("附件不能为空");
+        assertThatThrownBy(() -> attachmentService.upload(1L, png("", new byte[] {1}), owner))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("附件文件名不能为空");
+        assertThatThrownBy(() -> attachmentService.upload(1L, png("../", new byte[] {1}), owner))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("附件文件名不能为空");
+        assertThatThrownBy(() -> attachmentService.upload(1L, file("README", "text/plain", new byte[] {1}), owner))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("附件类型不允许");
+
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM work_order_attachments", Long.class)).isZero();
+        assertThat(Files.list(uploadDir)).isEmpty();
+    }
+
+    @Test
+    void downloadReportsMissingStoredFileWithoutLeakingPath() throws Exception {
+        CurrentUser owner = new CurrentUser(1L, "demo", "Demo", "USER");
+        WorkOrderAttachmentResponse attachment = attachmentService.upload(1L, pdf("manual.pdf", new byte[] {9, 8, 7}), owner);
+        String storedFilename = jdbcTemplate.queryForObject(
+                "SELECT stored_filename FROM work_order_attachments WHERE id = ?",
+                String.class,
+                attachment.id());
+        Files.delete(uploadDir.resolve(storedFilename));
+
+        assertThatThrownBy(() -> attachmentService.download(1L, attachment.id(), owner))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("附件文件不存在");
+    }
+
     private MockMultipartFile png(String filename, byte[] content) {
         return file(filename, "image/png", content);
     }

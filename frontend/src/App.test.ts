@@ -196,6 +196,42 @@ describe('App', () => {
     expect(wrapper.text()).toContain('数据库连接正常');
   });
 
+  it('shows login API errors without opening protected views', async () => {
+    const wrapper = await mountWithApi();
+    vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
+      const url = input.toString();
+      if (url === '/api/auth/login' && init?.method === 'POST') return okResponse({ message: '用户名或密码错误' }, 400);
+      if (url === '/api/system/status') return okResponse({ status: 'ok', service: 'work-order-system', timestamp: 'now' });
+      if (url === '/api/system/database') return okResponse({ status: 'ok', database: 'mysql', validation: 1 });
+      if (url === '/api/auth/me') return okResponse({ message: '请先登录' }, 401);
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    await fillInputs(wrapper, ['demo', 'wrong-password']);
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('用户名或密码错误');
+    expect(wrapper.text()).toContain('用户登录');
+    expect(wrapper.text()).not.toContain('工单列表');
+    const listCall = vi.mocked(globalThis.fetch).mock.calls.find(([url]) => url.toString().startsWith('/api/work-orders'));
+    expect(listCall).toBeFalsy();
+  });
+
+  it('validates register confirmation before calling the API', async () => {
+    const wrapper = await mountWithApi();
+    await wrapper.findAll('button').find((button) => button.text() === '去注册')!.trigger('click');
+    await flushPromises();
+
+    await fillInputs(wrapper, ['demo', 'Demo User', 'password123', 'password456']);
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('两次输入的密码不一致');
+    const registerCall = vi.mocked(globalThis.fetch).mock.calls.find(([url, init]) => url.toString() === '/api/auth/register' && init?.method === 'POST');
+    expect(registerCall).toBeFalsy();
+  });
+
   it('logs in and opens protected work order list', async () => {
     const wrapper = await mountWithApi();
     vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
@@ -737,6 +773,33 @@ describe('App', () => {
     await wrapper.findAll('form')[wrapper.findAll('form').length - 1]!.trigger('submit');
     await flushPromises();
     expect(wrapper.text()).toContain('标题不能为空');
+  });
+
+  it('shows create API validation errors without opening stale detail content', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = input.toString();
+      const method = init?.method || 'GET';
+      if (url === '/api/system/status') return okResponse({ status: 'ok', service: 'work-order-system', timestamp: 'now' });
+      if (url === '/api/system/database') return okResponse({ status: 'ok', database: 'mysql', validation: 1 });
+      if (url === '/api/auth/me') return okResponse(user);
+      if (url === '/api/work-orders' && method === 'POST') return okResponse({ message: '优先级只能是低、中、高', title: '不应显示的详情' }, 400);
+      if (url.startsWith('/api/work-orders') && method === 'GET') return okResponse(paged([]));
+      return Promise.reject(new Error(`Unexpected request: ${method} ${url}`));
+    });
+    const wrapper = mountApp();
+    await flushPromises();
+
+    const createForm = wrapper.findAll('form')[wrapper.findAll('form').length - 1]!;
+    const inputs = createForm.findAll('input');
+    await inputs[0]!.setValue('Printer');
+    await createForm.find('textarea')!.setValue('Cannot print');
+    await inputs[1]!.setValue('Device');
+    await createForm.trigger('submit');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('优先级只能是低、中、高');
+    expect(wrapper.text()).not.toContain('不应显示的详情');
+    expect(wrapper.text()).not.toContain('工单详情');
   });
 
   it('shows current username, nickname, and role on profile page', async () => {
