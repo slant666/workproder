@@ -70,6 +70,8 @@ docker compose down -v
 - Backend: `http://backend:8080/actuator/health` inside the Compose network.
 - Frontend: `http://127.0.0.1/` inside the Nginx container.
 
+The backend actuator endpoint is used by Docker Compose health checks inside the Docker network. It is not proxied by the public Nginx frontend.
+
 ## Back up database
 
 Create a backup directory:

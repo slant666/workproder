@@ -2,73 +2,63 @@
 
 ## Current Task
 
-T021: Docker 化和一键部署
+T023: 项目交付和面试准备。
 
 ## Status
 
-Implementation complete. Docker Desktop is installed and the WSL2 Docker engine is running. Compose files and deployment docs have been added. The Docker stack has been built and started successfully for a local trial run. No required implementation steps remain.
+交付文档和面试准备材料已完成。无正在执行的命令；本轮主要是文档变更，未修改业务代码。
 
 ## Completed Work
 
-- Verified Docker was initially missing.
-- Guided Docker Desktop installation and WSL2/virtualization setup without touching local MySQL data.
-- Confirmed Docker engine status after setup:
-  - `HyperVisorPresent=True`
-  - `docker-desktop` WSL distro running on version 2
-  - Docker server available: `29.6.2 linux Docker Desktop`
-- Added Docker deployment files:
-  - root `.dockerignore`
-  - root `.env.example`
-  - root `docker-compose.yml`
-  - `backend/Dockerfile`
-  - `frontend/Dockerfile`
-  - `frontend/nginx.conf`
-- Added deployment documentation in `deploy/README.md`:
-  - requirements;
-  - first-time `.env` setup;
-  - start and stop commands;
-  - health checks;
-  - database backup and restore;
-  - uploaded-file backup and restore;
-  - host port notes.
-- Created a local ignored `.env` from `.env.example` for trial startup.
-- Started the Docker stack successfully:
-  - `work-order-mysql` healthy on host port `3307`;
-  - `work-order-backend` healthy inside the Compose network;
-  - `work-order-frontend` healthy on host port `8088`.
-
-## Design Decisions
-
-- The containerized MySQL is isolated from local development MySQL.
-- Compose maps MySQL to host port `3307` by default to avoid local `3306` conflicts.
-- Backend is only reachable inside the Compose network; frontend Nginx exposes the public HTTP port and proxies `/api`.
-- MySQL data persists in the `mysql-data` Docker volume.
-- Uploaded files persist in the `backend-uploads` Docker volume.
-- Passwords and bootstrap token are provided through `.env` variables and are not hard-coded.
+- Added session-backed CSRF protection for all unsafe `/api/**` methods.
+- Added `/api/auth/csrf` token endpoint and frontend `apiFetch` wrapper.
+- Rotated the CSRF token and servlet session id after successful login to reduce session fixation risk.
+- Added login brute-force protection: 5 failed attempts lock the username for 15 minutes.
+- Fixed the login-failure counter bug that previously reset non-locked attempts before they could accumulate.
+- Kept login failure messages unified for wrong password, missing user, and disabled user.
+- Added `X-Content-Type-Options: nosniff` to attachment downloads.
+- Stopped Nginx from proxying `/actuator/` publicly; Compose still uses backend actuator health inside the Docker network.
+- Updated deployment docs to clarify actuator is internal-only.
+- Updated frontend tests so each test resets CSRF cache and mocks the CSRF endpoint independently.
+- Replaced the garbled root `README.md` with a complete project delivery README.
+- Added `docs/interview-prep.md` with interview pitch, common questions, and integrated answers.
 
 ## Changed Files
 
-- `.dockerignore`
-- `.env.example`
-- `docker-compose.yml`
-- `backend/Dockerfile`
-- `frontend/Dockerfile`
+- `backend/src/main/java/com/example/workorder/api/ApiExceptionHandler.java`
+- `backend/src/main/java/com/example/workorder/api/AuthController.java`
+- `backend/src/main/java/com/example/workorder/api/WorkOrderController.java`
+- `backend/src/main/java/com/example/workorder/auth/AuthService.java`
+- `backend/src/main/java/com/example/workorder/auth/CsrfException.java`
+- `backend/src/main/java/com/example/workorder/auth/CsrfTokenResponse.java`
+- `backend/src/main/java/com/example/workorder/auth/CsrfTokenService.java`
+- `backend/src/main/java/com/example/workorder/auth/LoginRateLimitException.java`
+- `backend/src/main/java/com/example/workorder/config/CsrfInterceptor.java`
+- `backend/src/main/java/com/example/workorder/config/WebConfig.java`
+- `backend/src/test/java/com/example/workorder/api/AuthControllerTests.java`
+- `backend/src/test/java/com/example/workorder/api/WorkOrderControllerTests.java`
+- `backend/src/test/java/com/example/workorder/auth/AuthServiceTests.java`
+- `backend/src/test/java/com/example/workorder/config/CsrfInterceptorTests.java`
+- `frontend/src/api/http.ts`
+- `frontend/src/api/admin.ts`
+- `frontend/src/api/auth.ts`
+- `frontend/src/api/health.ts`
+- `frontend/src/api/workOrders.ts`
+- `frontend/src/App.test.ts`
 - `frontend/nginx.conf`
 - `deploy/README.md`
 - `PROGRESS.md`
+- `README.md`
+- `docs/interview-prep.md`
 
 ## Verification
 
-- `mvn test` from `backend`: BUILD SUCCESS, 108 tests run, 0 failures, 0 errors, 0 skipped.
-- `npm.cmd run test` from `frontend`: 1 test file passed, 40 tests passed.
-- `docker compose config` with temporary non-secret environment values: passed.
-- `docker compose up -d --build`: succeeded after pre-pulling base images and isolating container DB environment variable names from local development variables.
-- `docker compose ps`: MySQL, backend, and frontend are up and healthy.
-- `Invoke-WebRequest http://localhost:8088/`: HTTP 200.
-- `Invoke-WebRequest http://localhost:8088/actuator/health`: backend health response proxied through Nginx.
+- `mvn test` from `backend`: BUILD SUCCESS, 115 tests run, 0 failures, 0 errors, 0 skipped.
+- `npm.cmd run test` from `frontend`: 1 test file passed, 41 tests passed.
+- T023 changed documentation only; no additional automated tests were required for this documentation update.
 
-## Notes
+## Remaining Review Items
 
-- Do not commit real `.env` secrets.
-- Do not expose backend directly unless needed for debugging.
-- Do not map container MySQL to host `3306` while local MySQL80 is used.
+- File upload still mostly trusts declared content type; deeper magic-number validation can be handled in a follow-up.
+- Performance items from the audit remain mostly review findings: pagination strategy, index tuning, statistics query consolidation, and frontend detail request batching.
+- Mockito emits a future-JDK warning about dynamic agent loading during tests; it does not fail the build.

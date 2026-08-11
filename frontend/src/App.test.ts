@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import ElementPlus from 'element-plus';
 import { ElMessageBox } from 'element-plus';
 import App from './App.vue';
+import { apiFetch, resetCsrfToken } from './api/http';
 
 const okResponse = (body: unknown, status = 200) => Promise.resolve({ ok: status >= 200 && status < 300, status, json: () => Promise.resolve(body) } as Response);
 const noContent = () => Promise.resolve({ ok: true, status: 204, json: () => Promise.resolve(null) } as Response);
@@ -142,6 +143,7 @@ function mockApi(currentUser: unknown = null, orders: unknown[] = [], statistics
   vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
     const url = input.toString();
     const method = init?.method || 'GET';
+    if (url === '/api/auth/csrf') return okResponse({ token: 'csrf-token' });
     if (url === '/api/system/status') return okResponse({ status: 'ok', service: 'work-order-system', timestamp: 'now' });
     if (url === '/api/system/database') return okResponse({ status: 'ok', database: 'mysql', validation: 1 });
     if (url === '/api/auth/me') return currentUser ? okResponse(currentUser) : okResponse({ message: '请先登录' }, 401);
@@ -187,7 +189,25 @@ async function fillInputs(wrapper: ReturnType<typeof mountApp>, values: string[]
 }
 
 describe('App', () => {
-  beforeEach(() => vi.restoreAllMocks());
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    resetCsrfToken();
+  });
+
+  it('adds csrf token to unsafe API requests', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = input.toString();
+      if (url === '/api/auth/csrf') return okResponse({ token: 'csrf-token' });
+      if (url === '/api/work-orders' && init?.method === 'POST') return okResponse({ ok: true });
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    await apiFetch('/api/work-orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+
+    const createCall = vi.mocked(globalThis.fetch).mock.calls.find(([url, init]) => url.toString() === '/api/work-orders' && init?.method === 'POST');
+    expect(createCall).toBeTruthy();
+    expect(new Headers(createCall![1]!.headers).get('X-CSRF-Token')).toBe('csrf-token');
+  });
 
   it('renders health states', async () => {
     const wrapper = await mountWithApi();
@@ -200,6 +220,7 @@ describe('App', () => {
     const wrapper = await mountWithApi();
     vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
       const url = input.toString();
+      if (url === '/api/auth/csrf') return okResponse({ token: 'csrf-token' });
       if (url === '/api/auth/login' && init?.method === 'POST') return okResponse({ message: '用户名或密码错误' }, 400);
       if (url === '/api/system/status') return okResponse({ status: 'ok', service: 'work-order-system', timestamp: 'now' });
       if (url === '/api/system/database') return okResponse({ status: 'ok', database: 'mysql', validation: 1 });
@@ -236,6 +257,7 @@ describe('App', () => {
     const wrapper = await mountWithApi();
     vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
       const url = input.toString();
+      if (url === '/api/auth/csrf') return okResponse({ token: 'csrf-token' });
       if (url === '/api/auth/login' && init?.method === 'POST') return okResponse(user);
       if (url.startsWith('/api/work-orders')) return okResponse(paged([]));
       return okResponse({ message: '请先登录' }, 401);
@@ -675,6 +697,7 @@ describe('App', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
       const url = input.toString();
       const method = init?.method || 'GET';
+      if (url === '/api/auth/csrf') return okResponse({ token: 'csrf-token' });
       if (url === '/api/system/status') return okResponse({ status: 'ok', service: 'work-order-system', timestamp: 'now' });
       if (url === '/api/system/database') return okResponse({ status: 'ok', database: 'mysql', validation: 1 });
       if (url === '/api/auth/me') return okResponse(user);
@@ -732,6 +755,7 @@ describe('App', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
       const url = input.toString();
       const method = init?.method || 'GET';
+      if (url === '/api/auth/csrf') return okResponse({ token: 'csrf-token' });
       if (url === '/api/system/status') return okResponse({ status: 'ok', service: 'work-order-system', timestamp: 'now' });
       if (url === '/api/system/database') return okResponse({ status: 'ok', database: 'mysql', validation: 1 });
       if (url === '/api/auth/me') return okResponse(user);
@@ -779,6 +803,7 @@ describe('App', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
       const url = input.toString();
       const method = init?.method || 'GET';
+      if (url === '/api/auth/csrf') return okResponse({ token: 'csrf-token' });
       if (url === '/api/system/status') return okResponse({ status: 'ok', service: 'work-order-system', timestamp: 'now' });
       if (url === '/api/system/database') return okResponse({ status: 'ok', database: 'mysql', validation: 1 });
       if (url === '/api/auth/me') return okResponse(user);
@@ -817,6 +842,7 @@ describe('App', () => {
     await flushPromises();
     vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
       const url = input.toString();
+      if (url === '/api/auth/csrf') return okResponse({ token: 'csrf-token' });
       if (url === '/api/auth/profile' && init?.method === 'PATCH') return okResponse({ ...user, nickname: '新昵称' });
       if (url === '/api/system/status') return okResponse({ status: 'ok', service: 'work-order-system', timestamp: 'now' });
       if (url === '/api/system/database') return okResponse({ status: 'ok', database: 'mysql', validation: 1 });
@@ -839,6 +865,7 @@ describe('App', () => {
     await flushPromises();
     vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
       const url = input.toString();
+      if (url === '/api/auth/csrf') return okResponse({ token: 'csrf-token' });
       if (url === '/api/auth/password' && init?.method === 'POST') return noContent();
       if (url === '/api/system/status') return okResponse({ status: 'ok', service: 'work-order-system', timestamp: 'now' });
       if (url === '/api/system/database') return okResponse({ status: 'ok', database: 'mysql', validation: 1 });

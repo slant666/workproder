@@ -1,3 +1,5 @@
+import { apiFetch } from './http';
+
 export type HealthStatus = 'checking' | 'ok' | 'error';
 
 export interface StatusCheck {
@@ -13,7 +15,7 @@ export interface DatabaseCheck {
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+  const response = await apiFetch(url);
 
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`);

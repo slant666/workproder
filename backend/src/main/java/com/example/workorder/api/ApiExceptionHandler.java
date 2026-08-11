@@ -2,6 +2,7 @@ package com.example.workorder.api;
 
 import com.example.workorder.auth.AdminUserException;
 import com.example.workorder.auth.AuthException;
+import com.example.workorder.auth.CsrfException;
 import com.example.workorder.auth.ForbiddenException;
 import com.example.workorder.auth.RegistrationException;
 import com.example.workorder.auth.UnauthorizedException;
@@ -73,6 +74,12 @@ public class ApiExceptionHandler {
     @ExceptionHandler(ForbiddenException.class)
     @ResponseStatus(HttpStatus.FORBIDDEN)
     public Map<String, String> forbidden(ForbiddenException ex) {
+        return Map.of("message", ex.getMessage());
+    }
+
+    @ExceptionHandler(CsrfException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public Map<String, String> csrf(CsrfException ex) {
         return Map.of("message", ex.getMessage());
     }
 }

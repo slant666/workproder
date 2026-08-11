@@ -5,6 +5,8 @@ import com.example.workorder.auth.BootstrapAdminRequest;
 import com.example.workorder.auth.BootstrapAdminService;
 import com.example.workorder.auth.ChangePasswordRequest;
 import com.example.workorder.auth.CurrentUser;
+import com.example.workorder.auth.CsrfTokenResponse;
+import com.example.workorder.auth.CsrfTokenService;
 import com.example.workorder.auth.LoginRequest;
 import com.example.workorder.auth.PermissionService;
 import com.example.workorder.auth.ProfileService;
@@ -13,6 +15,7 @@ import com.example.workorder.auth.RegisterResponse;
 import com.example.workorder.auth.RegistrationService;
 import com.example.workorder.auth.SessionKeys;
 import com.example.workorder.auth.UpdateProfileRequest;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -34,18 +37,26 @@ public class AuthController {
     private final AuthService authService;
     private final ProfileService profileService;
     private final PermissionService permissionService;
+    private final CsrfTokenService csrfTokenService;
 
     public AuthController(
             RegistrationService registrationService,
             BootstrapAdminService bootstrapAdminService,
             AuthService authService,
             ProfileService profileService,
-            PermissionService permissionService) {
+            PermissionService permissionService,
+            CsrfTokenService csrfTokenService) {
         this.registrationService = registrationService;
         this.bootstrapAdminService = bootstrapAdminService;
         this.authService = authService;
         this.profileService = profileService;
         this.permissionService = permissionService;
+        this.csrfTokenService = csrfTokenService;
+    }
+
+    @GetMapping("/csrf")
+    public CsrfTokenResponse csrf(HttpSession session) {
+        return new CsrfTokenResponse(csrfTokenService.getOrCreateToken(session));
     }
 
     @PostMapping("/register")
@@ -63,8 +74,10 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public CurrentUser login(@Valid @RequestBody LoginRequest request, HttpSession session) {
+    public CurrentUser login(@Valid @RequestBody LoginRequest request, HttpServletRequest httpRequest, HttpSession session) {
         CurrentUser currentUser = authService.login(request);
+        httpRequest.changeSessionId();
+        csrfTokenService.rotateToken(session);
         session.setAttribute(SessionKeys.CURRENT_USER, currentUser);
         return currentUser;
     }

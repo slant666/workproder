@@ -114,6 +114,7 @@ public class WorkOrderController {
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(download.attachment().contentType()))
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encodedFilename)
+                .header("X-Content-Type-Options", "nosniff")
                 .contentLength(download.attachment().fileSize())
                 .body(download.resource());
     }

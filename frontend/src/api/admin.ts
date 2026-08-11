@@ -1,3 +1,4 @@
+import { apiFetch } from './http';
 import type { PagedWorkOrders, WorkOrder, WorkOrderListQuery } from './workOrders';
 
 export interface AdminWorkOrderListQuery extends WorkOrderListQuery {
@@ -81,7 +82,7 @@ async function readAdminError(response: Response, fallback: string) {
 }
 
 export async function fetchAdminOverview(): Promise<{ status: string; area: string }> {
-  const response = await fetch('/api/admin/overview');
+  const response = await apiFetch('/api/admin/overview');
 
   if (response.status === 401) {
     throw new Error('请先登录');
@@ -105,7 +106,7 @@ export async function fetchAdminUsers(query: AdminUserListQuery = {}): Promise<P
   if (query.page !== undefined) params.set('page', String(query.page));
   if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
   const url = params.size > 0 ? `/api/admin/users?${params.toString()}` : '/api/admin/users';
-  const response = await fetch(url);
+  const response = await apiFetch(url);
 
   if (response.status === 401) {
     throw new Error('\u8bf7\u5148\u767b\u5f55');
@@ -121,7 +122,7 @@ export async function fetchAdminUsers(query: AdminUserListQuery = {}): Promise<P
 }
 
 export async function updateAdminUserEnabled(id: number, enabled: boolean): Promise<AdminUser> {
-  const response = await fetch(`/api/admin/users/${id}/enabled`, {
+  const response = await apiFetch(`/api/admin/users/${id}/enabled`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
@@ -141,7 +142,7 @@ export async function updateAdminUserEnabled(id: number, enabled: boolean): Prom
 }
 
 export async function updateAdminUserRole(id: number, role: 'USER' | 'ADMIN'): Promise<AdminUser> {
-  const response = await fetch(`/api/admin/users/${id}/role`, {
+  const response = await apiFetch(`/api/admin/users/${id}/role`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ role }),
@@ -165,7 +166,7 @@ export async function fetchAdminWorkOrderStatistics(query: AdminWorkOrderStatist
   if (query.createdFrom) params.set('createdFrom', query.createdFrom);
   if (query.createdTo) params.set('createdTo', query.createdTo);
   const url = params.size > 0 ? `/api/admin/work-orders/statistics?${params.toString()}` : '/api/admin/work-orders/statistics';
-  const response = await fetch(url);
+  const response = await apiFetch(url);
 
   if (response.status === 401) {
     throw new Error('\u8bf7\u5148\u767b\u5f55');
@@ -193,7 +194,7 @@ export async function fetchAdminWorkOrders(query: AdminWorkOrderListQuery = {}):
   if (query.page !== undefined) params.set('page', String(query.page));
   if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
   const url = params.size > 0 ? `/api/admin/work-orders?${params.toString()}` : '/api/admin/work-orders';
-  const response = await fetch(url);
+  const response = await apiFetch(url);
 
   if (response.status === 401) {
     throw new Error('\u8bf7\u5148\u767b\u5f55');
@@ -209,7 +210,7 @@ export async function fetchAdminWorkOrders(query: AdminWorkOrderListQuery = {}):
 }
 
 export async function fetchAdminHandlers(): Promise<AdminHandler[]> {
-  const response = await fetch('/api/admin/handlers');
+  const response = await apiFetch('/api/admin/handlers');
 
   if (response.status === 401) {
     throw new Error('\u8bf7\u5148\u767b\u5f55');
@@ -225,7 +226,7 @@ export async function fetchAdminHandlers(): Promise<AdminHandler[]> {
 }
 
 export async function assignWorkOrderHandler(id: number, handlerId: number): Promise<WorkOrder> {
-  const response = await fetch(`/api/admin/work-orders/${id}/handler`, {
+  const response = await apiFetch(`/api/admin/work-orders/${id}/handler`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ handlerId }),
@@ -245,7 +246,7 @@ export async function assignWorkOrderHandler(id: number, handlerId: number): Pro
 }
 
 async function updateAdminWorkOrderState(id: number, action: 'accept' | 'submit' | 'return', fallback: string): Promise<WorkOrder> {
-  const response = await fetch(`/api/admin/work-orders/${id}/${action}`, { method: 'PUT' });
+  const response = await apiFetch(`/api/admin/work-orders/${id}/${action}`, { method: 'PUT' });
 
   if (response.status === 401) {
     throw new Error('\u8bf7\u5148\u767b\u5f55');

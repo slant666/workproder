@@ -200,6 +200,7 @@ class WorkOrderControllerTests {
         assertThat(list).extracting(WorkOrderAttachmentResponse::originalFilename).containsExactly("photo.png");
         assertThat(uploaded.originalFilename()).isEqualTo("photo.png");
         assertThat(download.getHeaders().getFirst("Content-Disposition")).contains("filename*=UTF-8''photo.png");
+        assertThat(download.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
     }
 
     private WorkOrderController controller(FakeWorkOrderService workOrderService, FakeAttachmentService attachmentService) {
