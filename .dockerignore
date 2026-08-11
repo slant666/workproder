@@ -1,0 +1,9 @@
+.git
+.idea
+.vscode
+backend/target
+backend/uploads
+frontend/dist
+frontend/node_modules
+**/*.log
+**/t003-frontend.*.log
