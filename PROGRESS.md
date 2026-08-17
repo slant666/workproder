@@ -721,3 +721,17 @@ T024: 组织架构与部门级工单权限。
   - Backend dependency tree confirmed:
     - `org.apache.tomcat.embed:tomcat-embed-core:jar:10.1.55`.
     - `org.bouncycastle:bcprov-jdk18on:jar:1.84`.
+
+## Latest Note - CI Docker Image Name Fix
+
+- GitHub Actions run `32040702722` progressed through tests, security scan, Docker Compose validation, and Docker image build, then failed at `Scan backend image`.
+- Root cause:
+  - The workflow scanned `work-order-system-backend:latest`.
+  - `docker compose build` did not guarantee that exact image tag without explicit `image:` names in `docker-compose.yml`.
+  - Trivy therefore reported `No such image: work-order-system-backend:latest`.
+- Fix:
+  - Added explicit Compose image names:
+    - backend: `work-order-system-backend:latest`
+    - frontend: `work-order-system-frontend:latest`
+- Verification:
+  - `docker compose config --quiet`: passed.
