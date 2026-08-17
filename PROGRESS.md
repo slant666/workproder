@@ -749,5 +749,6 @@ T024: 组织架构与部门级工单权限。
   - Build log confirmed `libcrypto3` and `libssl3` upgraded from `3.3.3-r0` to `3.3.7-r0`.
   - Local Trivy was unavailable on this Windows machine, so GitHub Actions remains the authoritative scan verification.
   - GitHub Actions run `32041329369`: passed end-to-end in 10m14s, including frontend tests/type-check/build, backend tests, dependency and filesystem scans, Docker image build, backend/frontend image scans, temporary test environment deployment, backend health check, and frontend health check.
+  - GitHub Actions rerun via empty commit `57c20ae`, run `32042155285`: passed end-to-end in 3m56s.
 - Remaining advisory only:
   - GitHub annotated that `actions/setup-java@v4` is deprecated and should later move to `v5`.
