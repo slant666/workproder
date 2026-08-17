@@ -683,3 +683,9 @@ T024: 组织架构与部门级工单权限。
 - Note:
   - GitHub Actions itself will only run after this workflow file is pushed to GitHub.
   - The first security gate is intentionally critical-only to keep the initial pipeline useful without making it noisy; it can be tightened to high/critical later.
+
+## Latest Note - GitHub Actions Trivy Version Fix
+
+- The first GitHub Actions run failed during action resolution before project tests started.
+- Root cause from run `32039774680`: `Unable to resolve action aquasecurity/trivy-action@0.28.0, unable to find version 0.28.0`.
+- Fixed `.github/workflows/ci.yml` to use `aquasecurity/trivy-action@v0.36.0`.

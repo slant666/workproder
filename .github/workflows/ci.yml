@@ -94,7 +94,7 @@ jobs:
         run: npm audit --audit-level=critical
 
       - name: Filesystem security scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -110,7 +110,7 @@ jobs:
         run: docker compose build
 
       - name: Scan backend image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: work-order-system-backend:latest
           severity: CRITICAL
@@ -118,7 +118,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Scan frontend image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: work-order-system-frontend:latest
           severity: CRITICAL
