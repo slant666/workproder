@@ -735,3 +735,16 @@ T024: 组织架构与部门级工单权限。
     - frontend: `work-order-system-frontend:latest`
 - Verification:
   - `docker compose config --quiet`: passed.
+
+## Latest Note - CI Frontend Image OpenSSL Vulnerability Fix
+
+- GitHub Actions run `32040984529` passed frontend install/test/type-check/build, backend tests, filesystem scan, Compose validation, Docker build, and backend image scan, then failed at `Scan frontend image`.
+- Root cause:
+  - The final frontend image `nginx:1.27-alpine` used Alpine 3.21 packages `libcrypto3` and `libssl3` version `3.3.3-r0`.
+  - Trivy reported critical `CVE-2026-31789`, fixed in `3.3.7-r0`.
+- Fix:
+  - Added `RUN apk upgrade --no-cache libcrypto3 libssl3` in `frontend/Dockerfile` final image stage.
+- Verification:
+  - `docker compose build frontend`: passed.
+  - Build log confirmed `libcrypto3` and `libssl3` upgraded from `3.3.3-r0` to `3.3.7-r0`.
+  - Local Trivy was unavailable on this Windows machine, so GitHub Actions remains the authoritative scan verification.
