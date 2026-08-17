@@ -3,11 +3,14 @@ package com.example.workorder.workorder;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.example.workorder.redis.RedisSupportService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
@@ -137,6 +140,47 @@ class WorkOrderStatisticsServiceTests {
                 .isInstanceOf(WorkOrderException.class);
     }
 
+    @Test
+    void returnsCachedStatisticsWhenRedisHasResult() {
+        WorkOrderStatisticsResponse cached = new WorkOrderStatisticsResponse(
+                99,
+                java.util.List.of(),
+                java.util.List.of(),
+                java.util.List.of(),
+                0,
+                java.util.List.of(),
+                0,
+                "cached average",
+                "cached overdue");
+        FakeRedisSupportService redis = new FakeRedisSupportService(cached);
+        service = new WorkOrderStatisticsService(
+                jdbcTemplate,
+                Clock.fixed(Instant.parse("2026-08-04T00:00:00Z"), ZoneOffset.UTC),
+                redis);
+
+        WorkOrderStatisticsResponse response = service.dashboard(new WorkOrderStatisticsQuery(" 2026-08-01 ", null));
+
+        assertThat(response.total()).isEqualTo(99);
+        assertThat(redis.lastGetQuery.createdFrom()).isEqualTo("2026-08-01");
+        assertThat(redis.putCount).isZero();
+    }
+
+    @Test
+    void writesStatisticsToRedisAfterDatabaseFallback() {
+        FakeRedisSupportService redis = new FakeRedisSupportService(null);
+        service = new WorkOrderStatisticsService(
+                jdbcTemplate,
+                Clock.fixed(Instant.parse("2026-08-04T00:00:00Z"), ZoneOffset.UTC),
+                redis);
+        insertWorkOrder(1L, "Pending", "\u9ad8", "\u5f85\u5904\u7406", 3L, null, "2026-08-01 00:00:00");
+
+        WorkOrderStatisticsResponse response = service.dashboard(new WorkOrderStatisticsQuery(null, null));
+
+        assertThat(response.total()).isEqualTo(1);
+        assertThat(redis.putCount).isEqualTo(1);
+        assertThat(redis.lastPutResponse.total()).isEqualTo(1);
+    }
+
     private void insertUser(Long id, String username, String nickname, String role) {
         jdbcTemplate.update(
                 "INSERT INTO users (id, username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, ?, TRUE)",
@@ -176,5 +220,29 @@ class WorkOrderStatisticsServiceTests {
                 actorId,
                 action,
                 createdAt);
+    }
+
+    private static class FakeRedisSupportService extends RedisSupportService {
+        private final WorkOrderStatisticsResponse cached;
+        private WorkOrderStatisticsQuery lastGetQuery;
+        private WorkOrderStatisticsResponse lastPutResponse;
+        private int putCount;
+
+        FakeRedisSupportService(WorkOrderStatisticsResponse cached) {
+            super((StringRedisTemplate) null, new ObjectMapper());
+            this.cached = cached;
+        }
+
+        @Override
+        public WorkOrderStatisticsResponse getStatistics(WorkOrderStatisticsQuery query) {
+            lastGetQuery = query;
+            return cached;
+        }
+
+        @Override
+        public void putStatistics(WorkOrderStatisticsQuery query, WorkOrderStatisticsResponse response) {
+            putCount++;
+            lastPutResponse = response;
+        }
     }
 }

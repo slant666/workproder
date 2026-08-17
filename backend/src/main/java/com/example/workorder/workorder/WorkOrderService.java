@@ -2,18 +2,26 @@ package com.example.workorder.workorder;
 
 import com.example.workorder.auth.CurrentUser;
 import com.example.workorder.auth.ForbiddenException;
+import com.example.workorder.auth.RbacPermission;
 import com.example.workorder.auth.Role;
+import com.example.workorder.notification.NotificationService;
+import com.example.workorder.redis.RedisSupportService;
+import com.example.workorder.realtime.RealtimeEventPublisher;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.Duration;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -37,23 +45,45 @@ public class WorkOrderService {
     private static final int MAX_PAGE_SIZE = 50;
 
     private final JdbcTemplate jdbcTemplate;
+    private final NotificationService notificationService;
+    private final RedisSupportService redisSupportService;
+    private final RealtimeEventPublisher realtimeEventPublisher;
+    private Boolean slaColumnsAvailable;
+
+    @Autowired
+    public WorkOrderService(
+            JdbcTemplate jdbcTemplate,
+            NotificationService notificationService,
+            ObjectProvider<RedisSupportService> redisSupportServiceProvider,
+            ObjectProvider<RealtimeEventPublisher> realtimeEventPublisherProvider) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.notificationService = notificationService;
+        this.redisSupportService = redisSupportServiceProvider.getIfAvailable();
+        this.realtimeEventPublisher = realtimeEventPublisherProvider.getIfAvailable();
+    }
+
+    public WorkOrderService(JdbcTemplate jdbcTemplate, NotificationService notificationService) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.notificationService = notificationService;
+        this.redisSupportService = null;
+        this.realtimeEventPublisher = null;
+    }
 
     public WorkOrderService(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = jdbcTemplate;
+        this(jdbcTemplate, null);
     }
 
     public PagedWorkOrderResponse listVisible(WorkOrderListQuery query, CurrentUser currentUser) {
         NormalizedListQuery normalized = normalizeListQuery(query);
         List<Object> params = new ArrayList<>();
-        Long forcedCreatorId = Role.ADMIN.name().equals(currentUser.role()) ? null : currentUser.id();
-        String where = buildListWhere(normalized, forcedCreatorId, params);
+        String where = buildListWhere(normalized, currentUser, false, params);
         return listByCriteria(normalized, where, params);
     }
 
     public PagedWorkOrderResponse listAllForAdmin(WorkOrderListQuery query) {
         NormalizedListQuery normalized = normalizeListQuery(query);
         List<Object> params = new ArrayList<>();
-        String where = buildListWhere(normalized, null, params);
+        String where = buildListWhere(normalized, null, true, params);
         return listByCriteria(normalized, where, params);
     }
 
@@ -62,7 +92,10 @@ public class WorkOrderService {
                 """
                 SELECT id, username, nickname
                 FROM users
-                WHERE role = ? AND enabled = TRUE
+                WHERE enabled = TRUE
+                  AND (role = ? OR EXISTS (
+                      SELECT 1 FROM department_admins da WHERE da.user_id = users.id
+                  ))
                 ORDER BY username ASC, id ASC
                 """,
                 (rs, rowNum) -> new AdminHandlerResponse(
@@ -131,6 +164,8 @@ public class WorkOrderService {
             throw new WorkOrderException("\u6dfb\u52a0\u8bc4\u8bba\u5931\u8d25");
         }
         recordCommentOperation(id, currentUser, "comment_add", key.longValue());
+        notifyCommentParticipants(workOrder, currentUser);
+        publishWorkOrderChanged("COMMENT_CREATED", id, Map.of("commentId", key.longValue()));
         return findCommentById(id, key.longValue());
     }
 
@@ -158,16 +193,14 @@ public class WorkOrderService {
 
     @Transactional
     public WorkOrderResponse assignHandler(Long id, AssignWorkOrderRequest request, CurrentUser admin) {
-        if (admin == null || !Role.ADMIN.name().equals(admin.role())) {
-            throw new ForbiddenException();
-        }
         if (request == null || request.handlerId() == null || request.handlerId() < 1) {
             throw new WorkOrderException("\u5904\u7406\u4eba\u53c2\u6570\u4e0d\u6b63\u786e");
         }
 
         WorkOrderResponse existing = findById(id);
+        requireDepartmentAdminOrGlobal(admin, existing.departmentId());
         requireAssignable(existing);
-        requireEnabledAdminHandler(request.handlerId());
+        requireEligibleHandlerForDepartment(request.handlerId(), existing.departmentId());
 
         jdbcTemplate.update(
                 "UPDATE work_orders SET handler_id = ? WHERE id = ?",
@@ -190,6 +223,9 @@ public class WorkOrderService {
                 existing.handlerUsername(),
                 usernameById(request.handlerId()),
                 handlerDetails(existing.handlerId(), existing.handlerUsername(), request.handlerId()));
+        notifyUser(request.handlerId(), "WORK_ORDER_ASSIGNED", "工单已分配", "你被分配了工单：" + existing.title(), id);
+        publishWorkOrderChanged("WORK_ORDER_ASSIGNED", id, Map.of("handlerId", request.handlerId()));
+        evictStatisticsCache();
         return findById(id);
     }
 
@@ -213,6 +249,16 @@ public class WorkOrderService {
 
     @Transactional
     public WorkOrderResponse create(CreateWorkOrderRequest request, CurrentUser creator) {
+        if (creator == null || !creator.orgConfirmed() || creator.departmentId() == null) {
+            throw new WorkOrderException("请先完成部门归属确认");
+        }
+        String idempotencyKey = normalizeIdempotencyKey(request.idempotencyKey());
+        if (idempotencyKey != null) {
+            WorkOrderResponse existing = tryClaimIdempotencyKey(creator, idempotencyKey);
+            if (existing != null) {
+                return existing;
+            }
+        }
         String title = requireText(request.title(), "\u6807\u9898\u4e0d\u80fd\u4e3a\u7a7a");
         String description = requireText(request.description(), "\u8be6\u7ec6\u63cf\u8ff0\u4e0d\u80fd\u4e3a\u7a7a");
         String type = requireText(request.type(), "\u5de5\u5355\u7c7b\u578b\u4e0d\u80fd\u4e3a\u7a7a");
@@ -223,18 +269,36 @@ public class WorkOrderService {
 
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update(connection -> {
+            boolean includeSla = hasSlaColumns();
             PreparedStatement ps = connection.prepareStatement(
-                    """
-                    INSERT INTO work_orders (title, description, type, priority, status, creator_id)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
+                    includeSla
+                            ? """
+                              INSERT INTO work_orders
+                                  (title, description, type, priority, status, creator_id, company_id, department_id, team_id,
+                                   first_response_due_at, resolution_due_at, sla_status)
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              """
+                            : """
+                              INSERT INTO work_orders
+                                  (title, description, type, priority, status, creator_id, company_id, department_id, team_id)
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              """,
                     Statement.RETURN_GENERATED_KEYS);
+            Instant now = Instant.now();
             ps.setString(1, title);
             ps.setString(2, description);
             ps.setString(3, type);
             ps.setString(4, priority);
             ps.setString(5, INITIAL_STATUS);
             ps.setLong(6, creator.id());
+            ps.setObject(7, creator.companyId());
+            ps.setObject(8, creator.departmentId());
+            ps.setObject(9, creator.teamId());
+            if (includeSla) {
+                ps.setTimestamp(10, Timestamp.from(now.plus(firstResponseDuration(priority))));
+                ps.setTimestamp(11, Timestamp.from(now.plus(resolutionDuration(priority))));
+                ps.setString(12, "NORMAL");
+            }
             return ps;
         }, keyHolder);
 
@@ -242,8 +306,87 @@ public class WorkOrderService {
         if (key == null) {
             throw new WorkOrderException("\u521b\u5efa\u5de5\u5355\u5931\u8d25");
         }
+        if (idempotencyKey != null) {
+            bindIdempotencyKey(creator, idempotencyKey, key.longValue());
+        }
         recordOperation(key.longValue(), creator, "create", null, null, title, null);
+        evictStatisticsCache();
+        publishWorkOrderChanged("WORK_ORDER_CREATED", key.longValue(), Map.of("creatorId", creator.id(), "departmentId", creator.departmentId()));
         return getVisibleDetail(key.longValue(), creator);
+    }
+
+    private WorkOrderResponse tryClaimIdempotencyKey(CurrentUser creator, String idempotencyKey) {
+        try {
+            jdbcTemplate.update(
+                    "INSERT INTO work_order_idempotency_keys (creator_id, idempotency_key) VALUES (?, ?)",
+                    creator.id(),
+                    idempotencyKey);
+            return null;
+        } catch (DuplicateKeyException ex) {
+            Long workOrderId = findIdempotentWorkOrderId(creator.id(), idempotencyKey);
+            if (workOrderId == null) {
+                throw new WorkOrderException("工单正在创建中，请稍后刷新查看");
+            }
+            return getVisibleDetail(workOrderId, creator);
+        } catch (RuntimeException ex) {
+            if (isMissingIdempotencyTable(ex)) {
+                return null;
+            }
+            throw ex;
+        }
+    }
+
+    private void bindIdempotencyKey(CurrentUser creator, String idempotencyKey, Long workOrderId) {
+        try {
+            jdbcTemplate.update(
+                    """
+                    UPDATE work_order_idempotency_keys
+                    SET work_order_id = ?
+                    WHERE creator_id = ? AND idempotency_key = ? AND work_order_id IS NULL
+                    """,
+                    workOrderId,
+                    creator.id(),
+                    idempotencyKey);
+        } catch (RuntimeException ex) {
+            if (!isMissingIdempotencyTable(ex)) {
+                throw ex;
+            }
+        }
+    }
+
+    private Long findIdempotentWorkOrderId(Long creatorId, String idempotencyKey) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    """
+                    SELECT work_order_id
+                    FROM work_order_idempotency_keys
+                    WHERE creator_id = ? AND idempotency_key = ?
+                    """,
+                    Long.class,
+                    creatorId,
+                    idempotencyKey);
+        } catch (EmptyResultDataAccessException ex) {
+            return null;
+        }
+    }
+
+    private String normalizeIdempotencyKey(String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.trim().isEmpty()) {
+            return null;
+        }
+        String normalized = idempotencyKey.trim();
+        if (normalized.length() > 80) {
+            throw new WorkOrderException("请求唯一标识过长");
+        }
+        if (!normalized.matches("[A-Za-z0-9._:-]+")) {
+            throw new WorkOrderException("请求唯一标识格式不正确");
+        }
+        return normalized;
+    }
+
+    private boolean isMissingIdempotencyTable(RuntimeException ex) {
+        String message = ex.getMessage();
+        return message != null && message.toLowerCase().contains("work_order_idempotency_keys");
     }
 
     public WorkOrderResponse getVisibleDetail(Long id, CurrentUser currentUser) {
@@ -287,6 +430,7 @@ public class WorkOrderService {
         recordFieldChange(id, currentUser, "description", existing.description(), description);
         recordFieldChange(id, currentUser, "type", existing.type(), type);
         recordFieldChange(id, currentUser, "priority", existing.priority(), priority);
+        evictStatisticsCache();
         return findById(id);
     }
 
@@ -299,8 +443,9 @@ public class WorkOrderService {
 
     @Transactional
     public WorkOrderResponse accept(Long id, CurrentUser admin) {
-        requireAdmin(admin);
         WorkOrderResponse existing = findById(id);
+        requireUserPermission(admin, RbacPermission.TICKET_ACCEPT);
+        requireCanManage(existing, admin);
         if (existing.handlerId() != null && !existing.handlerId().equals(admin.id())) {
             throw new ForbiddenException();
         }
@@ -330,16 +475,16 @@ public class WorkOrderService {
 
     @Transactional
     public WorkOrderResponse submitForConfirmation(Long id, CurrentUser admin) {
-        requireAdmin(admin);
         WorkOrderResponse existing = findById(id);
+        requireUserPermission(admin, RbacPermission.TICKET_SUBMIT);
         requireHandler(existing, admin);
         return transitionStatus(existing, PROCESSING_STATUS, WAITING_CONFIRMATION_STATUS, admin, "submit");
     }
 
     @Transactional
     public WorkOrderResponse returnToProcessing(Long id, CurrentUser admin) {
-        requireAdmin(admin);
         WorkOrderResponse existing = findById(id);
+        requireUserPermission(admin, RbacPermission.TICKET_RETURN);
         requireHandler(existing, admin);
         return transitionStatus(existing, WAITING_CONFIRMATION_STATUS, PROCESSING_STATUS, admin, "return");
     }
@@ -366,10 +511,18 @@ public class WorkOrderService {
         return """
                 SELECT wo.id, wo.title, wo.description, wo.type, wo.priority, wo.status,
                        wo.creator_id, u.username AS creator_username,
-                       wo.handler_id, h.username AS handler_username, wo.created_at
+                       wo.handler_id, h.username AS handler_username,
+                       wo.company_id, c.name AS company_name,
+                       wo.department_id, d.name AS department_name,
+                       wo.team_id, t.name AS team_name,
+                       """ + slaSelectColumns() + """
+                       wo.created_at
                 FROM work_orders wo
                 JOIN users u ON u.id = wo.creator_id
                 LEFT JOIN users h ON h.id = wo.handler_id
+                LEFT JOIN companies c ON c.id = wo.company_id
+                LEFT JOIN departments d ON d.id = wo.department_id
+                LEFT JOIN teams t ON t.id = wo.team_id
                 """;
     }
 
@@ -379,14 +532,36 @@ public class WorkOrderService {
                 FROM work_orders wo
                 JOIN users u ON u.id = wo.creator_id
                 LEFT JOIN users h ON h.id = wo.handler_id
+                LEFT JOIN companies c ON c.id = wo.company_id
+                LEFT JOIN departments d ON d.id = wo.department_id
+                LEFT JOIN teams t ON t.id = wo.team_id
                 """;
     }
 
-    private String buildListWhere(NormalizedListQuery query, Long forcedCreatorId, List<Object> params) {
+    private String buildListWhere(NormalizedListQuery query, CurrentUser currentUser, boolean globalAdminView, List<Object> params) {
         List<String> conditions = new ArrayList<>();
-        if (forcedCreatorId != null) {
-            conditions.add("wo.creator_id = ?");
-            params.add(forcedCreatorId);
+        if (!globalAdminView && currentUser != null && !Role.ADMIN.name().equals(currentUser.role())) {
+            conditions.add("""
+                    (
+                        wo.creator_id = ?
+                        OR wo.handler_id = ?
+                        OR (
+                            wo.department_id IS NOT NULL
+                            AND ? = TRUE
+                            AND wo.department_id = ?
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM department_admins da
+                            WHERE da.user_id = ?
+                              AND da.department_id = wo.department_id
+                        )
+                    )
+                    """);
+            params.add(currentUser.id());
+            params.add(currentUser.id());
+            params.add(currentUser.orgConfirmed());
+            params.add(currentUser.departmentId());
+            params.add(currentUser.id());
         }
         if (query.keyword() != null) {
             conditions.add("LOWER(wo.title) LIKE LOWER(?) ESCAPE '\\'");
@@ -508,7 +683,48 @@ public class WorkOrderService {
                 rs.getString("creator_username"),
                 (Long) rs.getObject("handler_id"),
                 rs.getString("handler_username"),
+                (Long) rs.getObject("company_id"),
+                rs.getString("company_name"),
+                (Long) rs.getObject("department_id"),
+                rs.getString("department_name"),
+                (Long) rs.getObject("team_id"),
+                rs.getString("team_name"),
+                timestampToInstant(rs.getTimestamp("first_response_due_at")),
+                timestampToInstant(rs.getTimestamp("resolution_due_at")),
+                timestampToInstant(rs.getTimestamp("first_responded_at")),
+                timestampToInstant(rs.getTimestamp("resolved_at")),
+                rs.getString("sla_status"),
                 rs.getTimestamp("created_at").toInstant());
+    }
+
+    private Instant timestampToInstant(Timestamp timestamp) {
+        return timestamp == null ? null : timestamp.toInstant();
+    }
+
+    private String slaSelectColumns() {
+        if (hasSlaColumns()) {
+            return """
+                   wo.first_response_due_at, wo.resolution_due_at,
+                   wo.first_responded_at, wo.resolved_at, wo.sla_status,
+                   """;
+        }
+        return """
+               NULL AS first_response_due_at, NULL AS resolution_due_at,
+               NULL AS first_responded_at, NULL AS resolved_at, 'NORMAL' AS sla_status,
+               """;
+    }
+
+    private boolean hasSlaColumns() {
+        if (slaColumnsAvailable != null) {
+            return slaColumnsAvailable;
+        }
+        try {
+            jdbcTemplate.queryForList("SELECT first_response_due_at FROM work_orders WHERE 1 = 0");
+            slaColumnsAvailable = true;
+        } catch (RuntimeException ex) {
+            slaColumnsAvailable = false;
+        }
+        return slaColumnsAvailable;
     }
 
     private WorkOrderOperationLogResponse mapOperationLog(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
@@ -569,9 +785,47 @@ public class WorkOrderService {
     }
 
     private void requireCanManage(WorkOrderResponse workOrder, CurrentUser currentUser) {
-        if (!Role.ADMIN.name().equals(currentUser.role()) && !workOrder.creatorId().equals(currentUser.id())) {
+        if (currentUser == null) {
             throw new ForbiddenException();
         }
+        if (Role.ADMIN.name().equals(currentUser.role())
+                || workOrder.creatorId().equals(currentUser.id())
+                || (workOrder.handlerId() != null && workOrder.handlerId().equals(currentUser.id()))
+                || (workOrder.departmentId() != null
+                    && currentUser.orgConfirmed()
+                    && workOrder.departmentId().equals(currentUser.departmentId()))
+                || isDepartmentAdmin(currentUser.id(), workOrder.departmentId())) {
+            return;
+        }
+        throw new ForbiddenException();
+    }
+
+    private void requireUserPermission(CurrentUser currentUser, String permission) {
+        if (currentUser == null || !currentUser.hasPermission(permission)) {
+            throw new ForbiddenException();
+        }
+    }
+
+    private boolean isDepartmentAdmin(Long userId, Long departmentId) {
+        if (userId == null || departmentId == null) {
+            return false;
+        }
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM department_admins WHERE user_id = ? AND department_id = ?",
+                Integer.class,
+                userId,
+                departmentId);
+        return count != null && count > 0;
+    }
+
+    private void requireDepartmentAdminOrGlobal(CurrentUser currentUser, Long departmentId) {
+        if (currentUser == null) {
+            throw new ForbiddenException();
+        }
+        if (Role.ADMIN.name().equals(currentUser.role()) || isDepartmentAdmin(currentUser.id(), departmentId)) {
+            return;
+        }
+            throw new ForbiddenException();
     }
 
     private void requireAdmin(CurrentUser currentUser) {
@@ -631,8 +885,23 @@ public class WorkOrderService {
                 nextStatus,
                 actor.id(),
                 action);
+        if ("accept".equals(action) && hasSlaColumns()) {
+            jdbcTemplate.update("UPDATE work_orders SET first_responded_at = COALESCE(first_responded_at, CURRENT_TIMESTAMP) WHERE id = ?", existing.id());
+        }
+        if ("confirm".equals(action) && hasSlaColumns()) {
+            jdbcTemplate.update("UPDATE work_orders SET resolved_at = COALESCE(resolved_at, CURRENT_TIMESTAMP), sla_status = 'COMPLETED' WHERE id = ?", existing.id());
+        }
         recordOperation(existing.id(), actor, action, "status", expectedStatus, nextStatus, null);
+        notifyUser(existing.creatorId(), "WORK_ORDER_STATUS_CHANGED", "工单状态已更新", "你的工单「" + existing.title() + "」已变更为：" + nextStatus, existing.id());
+        evictStatisticsCache();
+        publishWorkOrderChanged("WORK_ORDER_STATUS_CHANGED", existing.id(), Map.of("status", nextStatus));
         return findById(existing.id());
+    }
+
+    private void evictStatisticsCache() {
+        if (redisSupportService != null) {
+            redisSupportService.evictStatistics();
+        }
     }
 
     public void recordCommentOperation(Long workOrderId, CurrentUser actor, String action, Long commentId) {
@@ -678,6 +947,54 @@ public class WorkOrderService {
                 detailsJson);
     }
 
+    private Duration firstResponseDuration(String priority) {
+        return switch (priority) {
+            case "高" -> Duration.ofHours(1);
+            case "中" -> Duration.ofHours(8);
+            default -> Duration.ofHours(24);
+        };
+    }
+
+    private Duration resolutionDuration(String priority) {
+        return switch (priority) {
+            case "高" -> Duration.ofHours(4);
+            case "中" -> Duration.ofHours(24);
+            default -> Duration.ofHours(72);
+        };
+    }
+
+    private void notifyUser(Long recipientId, String type, String title, String content, Long workOrderId) {
+        if (notificationService != null) {
+            notificationService.notifyUser(recipientId, type, title, content, workOrderId);
+        }
+    }
+
+    private void publishWorkOrderChanged(String type, Long workOrderId, Map<String, Object> payload) {
+        if (realtimeEventPublisher != null) {
+            realtimeEventPublisher.broadcast(type, workOrderId, payload);
+        }
+    }
+
+    private void notifyCommentParticipants(WorkOrderResponse workOrder, CurrentUser author) {
+        if (notificationService == null) {
+            return;
+        }
+        List<Long> recipients = new ArrayList<>();
+        recipients.add(workOrder.creatorId());
+        recipients.add(workOrder.handlerId());
+        recipients.addAll(jdbcTemplate.queryForList(
+                "SELECT DISTINCT author_id FROM work_order_comments WHERE work_order_id = ?",
+                Long.class,
+                workOrder.id()));
+        notificationService.notifyUsers(
+                recipients,
+                "WORK_ORDER_COMMENTED",
+                "工单有新评论",
+                "工单「" + workOrder.title() + "」有新评论",
+                workOrder.id(),
+                author.id());
+    }
+
     private String usernameById(Long userId) {
         if (userId == null) {
             return null;
@@ -704,15 +1021,30 @@ public class WorkOrderService {
         return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 
-    private void requireEnabledAdminHandler(Long handlerId) {
+    private void requireEligibleHandlerForDepartment(Long handlerId, Long departmentId) {
         try {
             Boolean valid = jdbcTemplate.queryForObject(
-                    "SELECT CASE WHEN role = ? AND enabled = TRUE THEN TRUE ELSE FALSE END FROM users WHERE id = ?",
+                    """
+                    SELECT CASE
+                        WHEN enabled = TRUE
+                         AND (
+                            role = ?
+                            OR EXISTS (
+                                SELECT 1 FROM department_admins da
+                                WHERE da.user_id = users.id
+                                  AND da.department_id = ?
+                            )
+                         )
+                        THEN TRUE ELSE FALSE END
+                    FROM users
+                    WHERE id = ?
+                    """,
                     Boolean.class,
                     Role.ADMIN.name(),
+                    departmentId,
                     handlerId);
             if (!Boolean.TRUE.equals(valid)) {
-                throw new WorkOrderException("\u5904\u7406\u4eba\u5fc5\u987b\u662f\u542f\u7528\u72b6\u6001\u7684\u7ba1\u7406\u5458");
+                throw new WorkOrderException("处理人必须是启用状态的全局管理员或工单所属部门管理员");
             }
         } catch (EmptyResultDataAccessException ex) {
             throw new WorkOrderException("\u5904\u7406\u4eba\u4e0d\u5b58\u5728");

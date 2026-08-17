@@ -19,7 +19,14 @@ class AdminUserServiceTests {
         DriverManagerDataSource dataSource = new DriverManagerDataSource("jdbc:h2:mem:admin_users;MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         jdbcTemplate = new JdbcTemplate(dataSource);
         jdbcTemplate.execute("DROP TABLE IF EXISTS user_management_audit_logs");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS department_admins");
         jdbcTemplate.execute("DROP TABLE IF EXISTS users");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS teams");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS departments");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS companies");
+        jdbcTemplate.execute("CREATE TABLE companies (id BIGINT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(120), enabled BOOLEAN DEFAULT TRUE)");
+        jdbcTemplate.execute("CREATE TABLE departments (id BIGINT PRIMARY KEY AUTO_INCREMENT, company_id BIGINT, name VARCHAR(120), enabled BOOLEAN DEFAULT TRUE)");
+        jdbcTemplate.execute("CREATE TABLE teams (id BIGINT PRIMARY KEY AUTO_INCREMENT, company_id BIGINT, department_id BIGINT, name VARCHAR(120), enabled BOOLEAN DEFAULT TRUE)");
         jdbcTemplate.execute("""
                 CREATE TABLE users (
                     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -28,10 +35,15 @@ class AdminUserServiceTests {
                     password_hash VARCHAR(100) NOT NULL,
                     role VARCHAR(30) NOT NULL DEFAULT 'USER',
                     enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                    company_id BIGINT NULL,
+                    department_id BIGINT NULL,
+                    team_id BIGINT NULL,
+                    org_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """);
+        jdbcTemplate.execute("CREATE TABLE department_admins (id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT, department_id BIGINT, UNIQUE(user_id, department_id))");
         jdbcTemplate.execute("""
                 CREATE TABLE user_management_audit_logs (
                     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -46,6 +58,8 @@ class AdminUserServiceTests {
                 )
                 """);
         service = new AdminUserService(jdbcTemplate);
+        jdbcTemplate.update("INSERT INTO companies (name, enabled) VALUES ('Default Company', TRUE)");
+        jdbcTemplate.update("INSERT INTO departments (company_id, name, enabled) VALUES (1, 'Default Department', TRUE)");
         createUser("admin", "Admin", "ADMIN", true);
         createUser("demo", "演示用户", "USER", true);
         createUser("disabled", "禁用用户", "USER", false);
@@ -115,7 +129,7 @@ class AdminUserServiceTests {
 
     private void createUser(String username, String nickname, String role, boolean enabled) {
         jdbcTemplate.update(
-                "INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, 'hash', ?, ?)",
+                "INSERT INTO users (username, nickname, password_hash, role, enabled, company_id, department_id, org_confirmed) VALUES (?, ?, 'hash', ?, ?, 1, 1, TRUE)",
                 username,
                 nickname,
                 role,

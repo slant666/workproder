@@ -25,7 +25,34 @@ class WorkOrderListServiceTests {
         DriverManagerDataSource dataSource = new DriverManagerDataSource("jdbc:h2:mem:workorder-list;MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         jdbcTemplate = new JdbcTemplate(dataSource);
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_orders");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS department_admins");
         jdbcTemplate.execute("DROP TABLE IF EXISTS users");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS teams");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS departments");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS companies");
+        jdbcTemplate.execute("""
+                CREATE TABLE companies (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    name VARCHAR(80) NOT NULL,
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE departments (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    company_id BIGINT NOT NULL,
+                    name VARCHAR(80) NOT NULL,
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE teams (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    department_id BIGINT NOT NULL,
+                    name VARCHAR(80) NOT NULL,
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE
+                )
+                """);
         jdbcTemplate.execute("""
                 CREATE TABLE users (
                     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -33,7 +60,18 @@ class WorkOrderListServiceTests {
                     nickname VARCHAR(60) NOT NULL,
                     password_hash VARCHAR(100) NOT NULL,
                     role VARCHAR(30) NOT NULL DEFAULT 'USER',
-                    enabled BOOLEAN NOT NULL DEFAULT TRUE
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                    company_id BIGINT NULL,
+                    department_id BIGINT NULL,
+                    team_id BIGINT NULL,
+                    org_confirmed BOOLEAN NOT NULL DEFAULT FALSE
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE department_admins (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    user_id BIGINT NOT NULL,
+                    department_id BIGINT NOT NULL
                 )
                 """);
         jdbcTemplate.execute("""
@@ -46,16 +84,21 @@ class WorkOrderListServiceTests {
                     status VARCHAR(20) NOT NULL,
                     creator_id BIGINT NOT NULL,
                     handler_id BIGINT NULL,
+                    company_id BIGINT NULL,
+                    department_id BIGINT NULL,
+                    team_id BIGINT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 )
                 """);
-        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, TRUE)",
-                "demo", "Demo", "hash", "USER");
-        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, TRUE)",
-                "other", "Other", "hash", "USER");
-        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, TRUE)",
-                "admin", "Admin", "hash", "ADMIN");
+        jdbcTemplate.update("INSERT INTO companies (id, name, enabled) VALUES (1, 'Acme', TRUE)");
+        jdbcTemplate.update("INSERT INTO departments (id, company_id, name, enabled) VALUES (1, 1, 'Finance', TRUE), (2, 1, 'HR', TRUE)");
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled, company_id, department_id, org_confirmed) VALUES (?, ?, ?, ?, TRUE, ?, ?, TRUE)",
+                "demo", "Demo", "hash", "USER", 1L, 1L);
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled, company_id, department_id, org_confirmed) VALUES (?, ?, ?, ?, TRUE, ?, ?, TRUE)",
+                "other", "Other", "hash", "USER", 1L, 2L);
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled, company_id, department_id, org_confirmed) VALUES (?, ?, ?, ?, TRUE, ?, ?, TRUE)",
+                "admin", "Admin", "hash", "ADMIN", 1L, 1L);
         workOrderService = new WorkOrderService(jdbcTemplate);
     }
 
@@ -163,8 +206,8 @@ class WorkOrderListServiceTests {
     private void insertWorkOrder(String title, String priority, String status, Long creatorId, Long handlerId, String createdAt) {
         jdbcTemplate.update(
                 """
-                INSERT INTO work_orders (title, description, type, priority, status, creator_id, handler_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO work_orders (title, description, type, priority, status, creator_id, handler_id, company_id, department_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 title,
                 "description",
@@ -173,14 +216,16 @@ class WorkOrderListServiceTests {
                 status,
                 creatorId,
                 handlerId,
+                1L,
+                creatorId.equals(2L) ? 2L : 1L,
                 createdAt);
     }
 
     private CurrentUser user() {
-        return new CurrentUser(1L, "demo", "Demo", "USER");
+        return new CurrentUser(1L, "demo", "Demo", "USER", 1L, "Acme", 1L, "Finance", null, null, true);
     }
 
     private CurrentUser admin() {
-        return new CurrentUser(3L, "admin", "Admin", "ADMIN");
+        return new CurrentUser(3L, "admin", "Admin", "ADMIN", 1L, "Acme", 1L, "Finance", null, null, true);
     }
 }

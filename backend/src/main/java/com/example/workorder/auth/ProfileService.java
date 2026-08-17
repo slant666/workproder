@@ -2,6 +2,7 @@ package com.example.workorder.auth;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -10,10 +11,17 @@ public class ProfileService {
 
     private final JdbcTemplate jdbcTemplate;
     private final PasswordEncoder passwordEncoder;
+    private final RbacService rbacService;
 
-    public ProfileService(JdbcTemplate jdbcTemplate, PasswordEncoder passwordEncoder) {
+    @Autowired
+    public ProfileService(JdbcTemplate jdbcTemplate, PasswordEncoder passwordEncoder, RbacService rbacService) {
         this.jdbcTemplate = jdbcTemplate;
         this.passwordEncoder = passwordEncoder;
+        this.rbacService = rbacService;
+    }
+
+    public ProfileService(JdbcTemplate jdbcTemplate, PasswordEncoder passwordEncoder) {
+        this(jdbcTemplate, passwordEncoder, new RbacService(jdbcTemplate));
     }
 
     @Transactional
@@ -23,7 +31,24 @@ public class ProfileService {
             throw new AuthException("昵称不能为空");
         }
         jdbcTemplate.update("UPDATE users SET nickname = ? WHERE id = ?", nickname, currentUser.id());
-        return new CurrentUser(currentUser.id(), currentUser.username(), nickname, currentUser.role());
+        CurrentUser user = jdbcTemplate.queryForObject(
+                UserSql.CURRENT_USER_SELECT + " WHERE u.id = ?",
+                UserSql::mapCurrentUser,
+                currentUser.id());
+        return new CurrentUser(
+                user.id(),
+                user.username(),
+                user.nickname(),
+                user.role(),
+                rbacService.rolesForUser(user.id(), user.role()),
+                rbacService.permissionsForUser(user.id(), user.role()),
+                user.companyId(),
+                user.companyName(),
+                user.departmentId(),
+                user.departmentName(),
+                user.teamId(),
+                user.teamName(),
+                user.orgConfirmed());
     }
 
     @Transactional

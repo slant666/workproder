@@ -23,8 +23,36 @@ class WorkOrderServiceTests {
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_comments");
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_status_transitions");
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_assignments");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_idempotency_keys");
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_orders");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS department_admins");
         jdbcTemplate.execute("DROP TABLE IF EXISTS users");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS teams");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS departments");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS companies");
+        jdbcTemplate.execute("""
+                CREATE TABLE companies (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    name VARCHAR(80) NOT NULL,
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE departments (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    company_id BIGINT NOT NULL,
+                    name VARCHAR(80) NOT NULL,
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE teams (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    department_id BIGINT NOT NULL,
+                    name VARCHAR(80) NOT NULL,
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE
+                )
+                """);
         jdbcTemplate.execute("""
                 CREATE TABLE users (
                     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -32,7 +60,18 @@ class WorkOrderServiceTests {
                     nickname VARCHAR(60) NOT NULL,
                     password_hash VARCHAR(100) NOT NULL,
                     role VARCHAR(30) NOT NULL DEFAULT 'USER',
-                    enabled BOOLEAN NOT NULL DEFAULT TRUE
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                    company_id BIGINT NULL,
+                    department_id BIGINT NULL,
+                    team_id BIGINT NULL,
+                    org_confirmed BOOLEAN NOT NULL DEFAULT FALSE
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE department_admins (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    user_id BIGINT NOT NULL,
+                    department_id BIGINT NOT NULL
                 )
                 """);
         jdbcTemplate.execute("""
@@ -45,6 +84,9 @@ class WorkOrderServiceTests {
                     status VARCHAR(20) NOT NULL DEFAULT '待处理',
                     creator_id BIGINT NOT NULL,
                     handler_id BIGINT NULL,
+                    company_id BIGINT NULL,
+                    department_id BIGINT NULL,
+                    team_id BIGINT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 )
@@ -57,6 +99,16 @@ class WorkOrderServiceTests {
                     new_handler_id BIGINT NOT NULL,
                     assigned_by BIGINT NOT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE work_order_idempotency_keys (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    creator_id BIGINT NOT NULL,
+                    idempotency_key VARCHAR(80) NOT NULL,
+                    work_order_id BIGINT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uk_work_order_idempotency_creator_key UNIQUE (creator_id, idempotency_key)
                 )
                 """);
         jdbcTemplate.execute("""
@@ -92,24 +144,31 @@ class WorkOrderServiceTests {
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """);
-        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, TRUE)",
-                "demo", "演示用户", "hash", "USER");
-        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, TRUE)",
-                "other", "其他用户", "hash", "USER");
-        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, TRUE)",
-                "admin", "管理员", "hash", "ADMIN");
-        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, TRUE)",
-                "handler", "Handler", "hash", "ADMIN");
-        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, FALSE)",
-                "disabled", "Disabled", "hash", "ADMIN");
-        jdbcTemplate.update("INSERT INTO work_orders (title, description, type, priority, status, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
-                "自己的工单", "自己的描述", "设备维修", "中", "待处理", 1L);
-        jdbcTemplate.update("INSERT INTO work_orders (title, description, type, priority, status, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
-                "别人的工单", "敏感描述", "账号问题", "高", "待处理", 2L);
-        jdbcTemplate.update("INSERT INTO work_orders (title, description, type, priority, status, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
-                "已取消工单", "不能再修改", "设备维修", "低", "已取消", 1L);
-        jdbcTemplate.update("INSERT INTO work_orders (title, description, type, priority, status, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
-                "已完成工单", "不能再修改", "设备维修", "中", "已完成", 1L);
+        jdbcTemplate.update("INSERT INTO companies (id, name, enabled) VALUES (1, 'Acme', TRUE)");
+        jdbcTemplate.update("INSERT INTO departments (id, company_id, name, enabled) VALUES (1, 1, 'Finance', TRUE), (2, 1, 'HR', TRUE), (3, 1, 'Admin', TRUE), (4, 1, 'IT', TRUE), (5, 1, 'Disabled', TRUE)");
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled, company_id, department_id, org_confirmed) VALUES (?, ?, ?, ?, TRUE, ?, ?, TRUE)",
+                "demo", "演示用户", "hash", "USER", 1L, 1L);
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled, company_id, department_id, org_confirmed) VALUES (?, ?, ?, ?, TRUE, ?, ?, TRUE)",
+                "other", "其他用户", "hash", "USER", 1L, 2L);
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled, company_id, department_id, org_confirmed) VALUES (?, ?, ?, ?, TRUE, ?, ?, TRUE)",
+                "admin", "管理员", "hash", "ADMIN", 1L, 3L);
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled, company_id, department_id, org_confirmed) VALUES (?, ?, ?, ?, TRUE, ?, ?, TRUE)",
+                "handler", "Handler", "hash", "ADMIN", 1L, 4L);
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled, company_id, department_id, org_confirmed) VALUES (?, ?, ?, ?, FALSE, ?, ?, TRUE)",
+                "disabled", "Disabled", "hash", "ADMIN", 1L, 5L);
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled, company_id, department_id, org_confirmed) VALUES (?, ?, ?, ?, TRUE, ?, ?, TRUE)",
+                "finance-manager", "Finance Manager", "hash", "USER", 1L, 1L);
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled, company_id, department_id, org_confirmed) VALUES (?, ?, ?, ?, TRUE, ?, ?, FALSE)",
+                "pending", "Pending User", "hash", "USER", 1L, 1L);
+        jdbcTemplate.update("INSERT INTO department_admins (user_id, department_id) VALUES (?, ?)", 6L, 1L);
+        jdbcTemplate.update("INSERT INTO work_orders (title, description, type, priority, status, creator_id, company_id, department_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "自己的工单", "自己的描述", "设备维修", "中", "待处理", 1L, 1L, 1L);
+        jdbcTemplate.update("INSERT INTO work_orders (title, description, type, priority, status, creator_id, company_id, department_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "别人的工单", "敏感描述", "账号问题", "高", "待处理", 2L, 1L, 2L);
+        jdbcTemplate.update("INSERT INTO work_orders (title, description, type, priority, status, creator_id, company_id, department_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "已取消工单", "不能再修改", "设备维修", "低", "已取消", 1L, 1L, 1L);
+        jdbcTemplate.update("INSERT INTO work_orders (title, description, type, priority, status, creator_id, company_id, department_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "已完成工单", "不能再修改", "设备维修", "中", "已完成", 1L, 1L, 1L);
         workOrderService = new WorkOrderService(jdbcTemplate);
     }
 
@@ -133,6 +192,57 @@ class WorkOrderServiceTests {
         var stored = jdbcTemplate.queryForMap("SELECT status, creator_id FROM work_orders WHERE id = ?", response.id());
         assertThat(stored.get("STATUS")).isEqualTo("待处理");
         assertThat(((Number) stored.get("CREATOR_ID")).longValue()).isEqualTo(1L);
+    }
+
+    @Test
+    void duplicateCreateWithSameIdempotencyKeyReturnsExistingWorkOrder() {
+        CurrentUser currentUser = new CurrentUser(1L, "demo", "演示用户", "USER");
+        CreateWorkOrderRequest firstRequest = new CreateWorkOrderRequest(
+                "打印机故障",
+                "无法打印",
+                "设备维修",
+                "高",
+                "create-key-001");
+        CreateWorkOrderRequest retryRequest = new CreateWorkOrderRequest(
+                "打印机故障",
+                "无法打印",
+                "设备维修",
+                "高",
+                "create-key-001");
+
+        WorkOrderResponse first = workOrderService.create(firstRequest, currentUser);
+        WorkOrderResponse retry = workOrderService.create(retryRequest, currentUser);
+
+        assertThat(retry.id()).isEqualTo(first.id());
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM work_orders WHERE title = ? AND creator_id = ?",
+                Long.class,
+                "打印机故障",
+                1L)).isEqualTo(1L);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT work_order_id FROM work_order_idempotency_keys WHERE creator_id = ? AND idempotency_key = ?",
+                Long.class,
+                1L,
+                "create-key-001")).isEqualTo(first.id());
+    }
+
+    @Test
+    void differentIdempotencyKeysCanCreateSameContentWorkOrders() {
+        CurrentUser currentUser = new CurrentUser(1L, "demo", "演示用户", "USER");
+
+        WorkOrderResponse first = workOrderService.create(
+                new CreateWorkOrderRequest("网络故障", "无法联网", "设备维修", "中", "create-key-a"),
+                currentUser);
+        WorkOrderResponse second = workOrderService.create(
+                new CreateWorkOrderRequest("网络故障", "无法联网", "设备维修", "中", "create-key-b"),
+                currentUser);
+
+        assertThat(second.id()).isNotEqualTo(first.id());
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM work_orders WHERE title = ? AND creator_id = ?",
+                Long.class,
+                "网络故障",
+                1L)).isEqualTo(2L);
     }
 
     @Test
@@ -469,7 +579,7 @@ class WorkOrderServiceTests {
     void listsOnlyEnabledAdminHandlers() {
         assertThat(workOrderService.listEnabledAdminHandlers())
                 .extracting(AdminHandlerResponse::username)
-                .containsExactly("admin", "handler");
+                .containsExactly("admin", "finance-manager", "handler");
     }
 
     @Test
@@ -503,10 +613,10 @@ class WorkOrderServiceTests {
 
         assertThatThrownBy(() -> workOrderService.assignHandler(1L, new AssignWorkOrderRequest(1L), admin))
                 .isInstanceOf(WorkOrderException.class)
-                .hasMessage("\u5904\u7406\u4eba\u5fc5\u987b\u662f\u542f\u7528\u72b6\u6001\u7684\u7ba1\u7406\u5458");
+                .hasMessage("处理人必须是启用状态的全局管理员或工单所属部门管理员");
         assertThatThrownBy(() -> workOrderService.assignHandler(1L, new AssignWorkOrderRequest(5L), admin))
                 .isInstanceOf(WorkOrderException.class)
-                .hasMessage("\u5904\u7406\u4eba\u5fc5\u987b\u662f\u542f\u7528\u72b6\u6001\u7684\u7ba1\u7406\u5458");
+                .hasMessage("处理人必须是启用状态的全局管理员或工单所属部门管理员");
         assertThatThrownBy(() -> workOrderService.assignHandler(1L, new AssignWorkOrderRequest(404L), admin))
                 .isInstanceOf(WorkOrderException.class)
                 .hasMessage("\u5904\u7406\u4eba\u4e0d\u5b58\u5728");
@@ -709,5 +819,46 @@ class WorkOrderServiceTests {
                 .hasMessage("评论不存在");
 
         assertThat(workOrderService.listVisibleOperationLogs(1L, admin)).isEmpty();
+    }
+
+    @Test
+    void departmentMembersCanOnlyViewConfirmedSameDepartmentWorkOrders() {
+        CurrentUser financeMember = new CurrentUser(1L, "demo", "Demo", "USER", 1L, "Acme", 1L, "Finance", null, null, true);
+        CurrentUser hrMember = new CurrentUser(2L, "other", "Other", "USER", 1L, "Acme", 2L, "HR", null, null, true);
+        CurrentUser pendingFinanceUser = new CurrentUser(7L, "pending", "Pending User", "USER", 1L, "Acme", 1L, "Finance", null, null, false);
+
+        assertThat(workOrderService.getVisibleDetail(1L, financeMember).departmentName()).isEqualTo("Finance");
+        assertThatThrownBy(() -> workOrderService.getVisibleDetail(1L, hrMember))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage("Access denied");
+        assertThatThrownBy(() -> workOrderService.getVisibleDetail(1L, pendingFinanceUser))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage("Access denied");
+    }
+
+    @Test
+    void departmentAdminCanViewAndAssignOnlyOwnDepartmentWorkOrders() {
+        CurrentUser financeManager = new CurrentUser(6L, "finance-manager", "Finance Manager", "USER", 1L, "Acme", 1L, "Finance", null, null, true);
+
+        assertThat(workOrderService.getVisibleDetail(1L, financeManager).departmentName()).isEqualTo("Finance");
+        assertThatThrownBy(() -> workOrderService.getVisibleDetail(2L, financeManager))
+                .isInstanceOf(ForbiddenException.class);
+
+        WorkOrderResponse assigned = workOrderService.assignHandler(1L, new AssignWorkOrderRequest(6L), financeManager);
+
+        assertThat(assigned.handlerId()).isEqualTo(6L);
+        assertThatThrownBy(() -> workOrderService.assignHandler(2L, new AssignWorkOrderRequest(6L), financeManager))
+                .isInstanceOf(ForbiddenException.class);
+    }
+
+    @Test
+    void rejectsCreatingWorkOrderBeforeOrganizationConfirmation() {
+        CurrentUser pendingFinanceUser = new CurrentUser(7L, "pending", "Pending User", "USER", 1L, "Acme", 1L, "Finance", null, null, false);
+
+        assertThatThrownBy(() -> workOrderService.create(
+                new CreateWorkOrderRequest("Printer", "Cannot print", "Device", "中"),
+                pendingFinanceUser))
+                .isInstanceOf(WorkOrderException.class)
+                .hasMessage("请先完成部门归属确认");
     }
 }

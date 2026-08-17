@@ -244,7 +244,7 @@ describe('App', () => {
     await wrapper.findAll('button').find((button) => button.text() === '去注册')!.trigger('click');
     await flushPromises();
 
-    await fillInputs(wrapper, ['demo', 'Demo User', 'password123', 'password456']);
+    await fillInputs(wrapper, ['demo', 'Demo User', 'demo@example.com', 'password123', 'password456']);
     await wrapper.find('form').trigger('submit');
     await flushPromises();
 

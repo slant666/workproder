@@ -6,6 +6,8 @@ import com.example.workorder.auth.CsrfException;
 import com.example.workorder.auth.ForbiddenException;
 import com.example.workorder.auth.RegistrationException;
 import com.example.workorder.auth.UnauthorizedException;
+import com.example.workorder.excel.ExcelException;
+import com.example.workorder.organization.OrganizationException;
 import com.example.workorder.workorder.WorkOrderException;
 import com.example.workorder.workorder.WorkOrderNotFoundException;
 import com.example.workorder.workorder.WorkOrderStateException;
@@ -41,9 +43,9 @@ public class ApiExceptionHandler {
         return Map.of("message", ex.getMessage());
     }
 
-    @ExceptionHandler(AdminUserException.class)
+    @ExceptionHandler({AdminUserException.class, OrganizationException.class, ExcelException.class})
     @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public Map<String, String> adminUser(AdminUserException ex) {
+    public Map<String, String> adminUser(RuntimeException ex) {
         return Map.of("message", ex.getMessage());
     }
 

@@ -3,8 +3,12 @@ import { apiFetch, resetCsrfToken } from './http';
 export interface RegisterForm {
   username: string;
   nickname: string;
+  email?: string;
   password: string;
   confirmPassword: string;
+  companyId?: number;
+  departmentId?: number;
+  teamId?: number;
 }
 
 export interface LoginForm {
@@ -17,6 +21,15 @@ export interface CurrentUser {
   username: string;
   nickname: string;
   role: string;
+  roles?: string[];
+  permissions?: string[];
+  companyId?: number | null;
+  companyName?: string | null;
+  departmentId?: number | null;
+  departmentName?: string | null;
+  teamId?: number | null;
+  teamName?: string | null;
+  orgConfirmed?: boolean;
 }
 
 export interface RegisterResult {
@@ -24,6 +37,13 @@ export interface RegisterResult {
   username: string;
   nickname: string;
   role: string;
+  companyId?: number | null;
+  companyName?: string | null;
+  departmentId?: number | null;
+  departmentName?: string | null;
+  teamId?: number | null;
+  teamName?: string | null;
+  orgConfirmed?: boolean;
 }
 
 export interface UpdateProfileForm {

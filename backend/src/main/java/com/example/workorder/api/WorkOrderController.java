@@ -2,6 +2,7 @@ package com.example.workorder.api;
 
 import com.example.workorder.auth.CurrentUser;
 import com.example.workorder.auth.PermissionService;
+import com.example.workorder.auth.RbacPermission;
 import com.example.workorder.workorder.CreateWorkOrderCommentRequest;
 import com.example.workorder.workorder.CreateWorkOrderRequest;
 import com.example.workorder.workorder.PagedWorkOrderResponse;
@@ -60,36 +61,41 @@ public class WorkOrderController {
             @RequestParam(required = false) Integer pageSize,
             HttpSession session) {
         CurrentUser user = permissionService.requireUser(session);
+        permissionService.requirePermission(user, RbacPermission.TICKET_VIEW);
         return workOrderService.listVisible(new WorkOrderListQuery(keyword, status, priority, null, null, null, null, sort, page, pageSize), user);
     }
 
     @PostMapping
     public WorkOrderResponse create(@RequestBody CreateWorkOrderRequest request, HttpSession session) {
-        CurrentUser user = permissionService.requireUser(session);
+        CurrentUser user = permissionService.requirePermission(session, RbacPermission.TICKET_CREATE);
         return workOrderService.create(request, user);
     }
 
     @GetMapping("/{id}")
     public WorkOrderResponse detail(@PathVariable Long id, HttpSession session) {
         CurrentUser user = permissionService.requireUser(session);
+        permissionService.requirePermission(user, RbacPermission.TICKET_VIEW);
         return workOrderService.getVisibleDetail(id, user);
     }
 
     @GetMapping("/{id}/logs")
     public List<WorkOrderOperationLogResponse> logs(@PathVariable Long id, HttpSession session) {
         CurrentUser user = permissionService.requireUser(session);
+        permissionService.requirePermission(user, RbacPermission.TICKET_LOG_VIEW);
         return workOrderService.listVisibleOperationLogs(id, user);
     }
 
     @GetMapping("/{id}/comments")
     public List<WorkOrderCommentResponse> comments(@PathVariable Long id, HttpSession session) {
         CurrentUser user = permissionService.requireUser(session);
+        permissionService.requirePermission(user, RbacPermission.TICKET_COMMENT);
         return workOrderService.listVisibleComments(id, user);
     }
 
     @GetMapping("/{id}/attachments")
     public List<WorkOrderAttachmentResponse> attachments(@PathVariable Long id, HttpSession session) {
         CurrentUser user = permissionService.requireUser(session);
+        permissionService.requirePermission(user, RbacPermission.TICKET_ATTACHMENT);
         return attachmentService.listVisibleAttachments(id, user);
     }
 
@@ -99,6 +105,7 @@ public class WorkOrderController {
             @RequestParam("file") MultipartFile file,
             HttpSession session) {
         CurrentUser user = permissionService.requireUser(session);
+        permissionService.requirePermission(user, RbacPermission.TICKET_ATTACHMENT);
         return attachmentService.upload(id, file, user);
     }
 
@@ -108,6 +115,7 @@ public class WorkOrderController {
             @PathVariable Long attachmentId,
             HttpSession session) {
         CurrentUser user = permissionService.requireUser(session);
+        permissionService.requirePermission(user, RbacPermission.TICKET_ATTACHMENT);
         WorkOrderAttachmentDownload download = attachmentService.download(id, attachmentId, user);
         String encodedFilename = URLEncoder.encode(download.attachment().originalFilename(), StandardCharsets.UTF_8)
                 .replace("+", "%20");
@@ -125,12 +133,14 @@ public class WorkOrderController {
             @RequestBody CreateWorkOrderCommentRequest request,
             HttpSession session) {
         CurrentUser user = permissionService.requireUser(session);
+        permissionService.requirePermission(user, RbacPermission.TICKET_COMMENT);
         return workOrderService.addComment(id, request, user);
     }
 
     @DeleteMapping("/{id}/comments/{commentId}")
     public void deleteComment(@PathVariable Long id, @PathVariable Long commentId, HttpSession session) {
         CurrentUser user = permissionService.requireUser(session);
+        permissionService.requirePermission(user, RbacPermission.TICKET_COMMENT);
         workOrderService.deleteComment(id, commentId, user);
     }
 
@@ -140,18 +150,21 @@ public class WorkOrderController {
             @RequestBody UpdateWorkOrderRequest request,
             HttpSession session) {
         CurrentUser user = permissionService.requireUser(session);
+        permissionService.requirePermission(user, RbacPermission.TICKET_UPDATE);
         return workOrderService.update(id, request, user);
     }
 
     @PostMapping("/{id}/cancel")
     public WorkOrderResponse cancel(@PathVariable Long id, HttpSession session) {
         CurrentUser user = permissionService.requireUser(session);
+        permissionService.requirePermission(user, RbacPermission.TICKET_CANCEL);
         return workOrderService.cancel(id, user);
     }
 
     @PostMapping("/{id}/confirm")
     public WorkOrderResponse confirm(@PathVariable Long id, HttpSession session) {
         CurrentUser user = permissionService.requireUser(session);
+        permissionService.requirePermission(user, RbacPermission.TICKET_CONFIRM);
         return workOrderService.confirmCompletion(id, user);
     }
 }

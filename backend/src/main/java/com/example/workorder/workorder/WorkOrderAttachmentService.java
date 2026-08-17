@@ -1,20 +1,15 @@
 package com.example.workorder.workorder;
 
 import com.example.workorder.auth.CurrentUser;
-import java.io.IOException;
-import java.net.MalformedURLException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
-import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.Resource;
-import org.springframework.core.io.UrlResource;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -51,17 +46,27 @@ public class WorkOrderAttachmentService {
 
     private final JdbcTemplate jdbcTemplate;
     private final WorkOrderService workOrderService;
-    private final Path uploadDir;
     private final long maxSizeBytes;
+    private final AttachmentStorageService storageService;
+    private Boolean storageColumnsAvailable;
+
+    @Autowired
+    public WorkOrderAttachmentService(
+            JdbcTemplate jdbcTemplate,
+            WorkOrderService workOrderService,
+            WorkOrderAttachmentProperties properties,
+            AttachmentStorageService storageService) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.workOrderService = workOrderService;
+        this.maxSizeBytes = properties.maxSizeBytes();
+        this.storageService = storageService;
+    }
 
     public WorkOrderAttachmentService(
             JdbcTemplate jdbcTemplate,
             WorkOrderService workOrderService,
             WorkOrderAttachmentProperties properties) {
-        this.jdbcTemplate = jdbcTemplate;
-        this.workOrderService = workOrderService;
-        this.uploadDir = Path.of(properties.uploadDir()).toAbsolutePath().normalize();
-        this.maxSizeBytes = properties.maxSizeBytes();
+        this(jdbcTemplate, workOrderService, properties, new LocalAttachmentStorageService(properties));
     }
 
     public List<WorkOrderAttachmentResponse> listVisibleAttachments(Long workOrderId, CurrentUser currentUser) {
@@ -83,35 +88,42 @@ public class WorkOrderAttachmentService {
     public WorkOrderAttachmentResponse upload(Long workOrderId, MultipartFile file, CurrentUser currentUser) {
         workOrderService.requireVisibleWorkOrder(workOrderId, currentUser);
         ValidatedFile validated = validate(file);
-        ensureUploadDirectory();
-        String storedFilename = UUID.randomUUID() + "." + validated.extension();
-        Path target = uploadDir.resolve(storedFilename).normalize();
-        if (!target.startsWith(uploadDir)) {
-            throw new WorkOrderException("附件保存路径不正确");
-        }
-
-        try {
-            file.transferTo(target);
-        } catch (IOException ex) {
-            throw new WorkOrderException("保存附件失败");
-        }
+        String objectKey = "work-orders/" + workOrderId + "/" + UUID.randomUUID() + "." + validated.extension();
+        AttachmentStorageService.StoredObject storedObject = storageService.store(
+                objectKey,
+                file,
+                validated.contentType(),
+                validated.size());
 
         try {
             KeyHolder keyHolder = new GeneratedKeyHolder();
             jdbcTemplate.update(connection -> {
+                boolean includeStorage = hasStorageColumns();
                 PreparedStatement ps = connection.prepareStatement(
-                        """
-                        INSERT INTO work_order_attachments
-                            (work_order_id, uploader_id, original_filename, stored_filename, content_type, file_size)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        """,
+                        includeStorage
+                                ? """
+                                  INSERT INTO work_order_attachments
+                                      (work_order_id, uploader_id, original_filename, stored_filename, content_type, file_size,
+                                       storage_provider, bucket_name, object_key)
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  """
+                                : """
+                                  INSERT INTO work_order_attachments
+                                      (work_order_id, uploader_id, original_filename, stored_filename, content_type, file_size)
+                                  VALUES (?, ?, ?, ?, ?, ?)
+                                  """,
                         Statement.RETURN_GENERATED_KEYS);
                 ps.setLong(1, workOrderId);
                 ps.setLong(2, currentUser.id());
                 ps.setString(3, validated.originalFilename());
-                ps.setString(4, storedFilename);
+                ps.setString(4, objectKey);
                 ps.setString(5, validated.contentType());
                 ps.setLong(6, validated.size());
+                if (includeStorage) {
+                    ps.setString(7, storedObject.provider());
+                    ps.setString(8, storedObject.bucket());
+                    ps.setString(9, storedObject.objectKey());
+                }
                 return ps;
             }, keyHolder);
             Number key = generatedId(keyHolder);
@@ -121,7 +133,7 @@ public class WorkOrderAttachmentService {
             workOrderService.recordAttachmentOperation(workOrderId, currentUser, "attachment_add", validated.originalFilename());
             return findVisibleAttachment(workOrderId, key.longValue());
         } catch (RuntimeException ex) {
-            deleteQuietly(target);
+            storageService.deleteQuietly(storedObject);
             throw ex;
         }
     }
@@ -129,15 +141,11 @@ public class WorkOrderAttachmentService {
     public WorkOrderAttachmentDownload download(Long workOrderId, Long attachmentId, CurrentUser currentUser) {
         workOrderService.requireVisibleWorkOrder(workOrderId, currentUser);
         StoredAttachment stored = findStoredAttachment(workOrderId, attachmentId);
-        Path path = uploadDir.resolve(stored.storedFilename()).normalize();
-        if (!path.startsWith(uploadDir) || !Files.isRegularFile(path)) {
-            throw new WorkOrderException("附件文件不存在");
-        }
-        try {
-            return new WorkOrderAttachmentDownload(stored.response(), new UrlResource(path.toUri()));
-        } catch (MalformedURLException ex) {
-            throw new WorkOrderException("附件文件不存在");
-        }
+        Resource resource = storageService.load(new AttachmentStorageService.StoredObject(
+                stored.storageProvider(),
+                stored.bucketName(),
+                stored.objectKey()));
+        return new WorkOrderAttachmentDownload(stored.response(), resource);
     }
 
     private ValidatedFile validate(MultipartFile file) {
@@ -192,24 +200,21 @@ public class WorkOrderAttachmentService {
         return value.trim().toLowerCase(Locale.ROOT);
     }
 
-    private void ensureUploadDirectory() {
-        try {
-            Files.createDirectories(uploadDir);
-        } catch (IOException ex) {
-            throw new WorkOrderException("附件目录不可用");
-        }
-    }
-
     private WorkOrderAttachmentResponse findVisibleAttachment(Long workOrderId, Long attachmentId) {
         return findStoredAttachment(workOrderId, attachmentId).response();
     }
 
     private StoredAttachment findStoredAttachment(Long workOrderId, Long attachmentId) {
         try {
+            boolean includeStorage = hasStorageColumns();
+            String storageColumns = includeStorage
+                    ? "a.storage_provider, a.bucket_name, a.object_key,"
+                    : "'local' AS storage_provider, NULL AS bucket_name, a.stored_filename AS object_key,";
             return jdbcTemplate.queryForObject(
                     """
                     SELECT a.id, a.work_order_id, a.uploader_id, u.username AS uploader_username,
                            u.nickname AS uploader_nickname, a.original_filename, a.stored_filename,
+                           """ + storageColumns + """
                            a.content_type, a.file_size, a.created_at
                     FROM work_order_attachments a
                     JOIN users u ON u.id = a.uploader_id
@@ -226,7 +231,10 @@ public class WorkOrderAttachmentService {
                                     rs.getString("content_type"),
                                     rs.getLong("file_size"),
                                     rs.getTimestamp("created_at").toInstant()),
-                            rs.getString("stored_filename")),
+                            rs.getString("stored_filename"),
+                            rs.getString("storage_provider"),
+                            rs.getString("bucket_name"),
+                            rs.getString("object_key")),
                     workOrderId,
                     attachmentId);
         } catch (EmptyResultDataAccessException ex) {
@@ -266,16 +274,27 @@ public class WorkOrderAttachmentService {
         return maxSizeBytes + " bytes";
     }
 
-    private void deleteQuietly(Path path) {
-        try {
-            Files.deleteIfExists(path);
-        } catch (IOException ignored) {
+    private boolean hasStorageColumns() {
+        if (storageColumnsAvailable != null) {
+            return storageColumnsAvailable;
         }
+        try {
+            jdbcTemplate.queryForList("SELECT storage_provider, bucket_name, object_key FROM work_order_attachments WHERE 1 = 0");
+            storageColumnsAvailable = true;
+        } catch (RuntimeException ex) {
+            storageColumnsAvailable = false;
+        }
+        return storageColumnsAvailable;
     }
 
     private record ValidatedFile(String originalFilename, String extension, String contentType, long size) {
     }
 
-    private record StoredAttachment(WorkOrderAttachmentResponse response, String storedFilename) {
+    private record StoredAttachment(
+            WorkOrderAttachmentResponse response,
+            String storedFilename,
+            String storageProvider,
+            String bucketName,
+            String objectKey) {
     }
 }

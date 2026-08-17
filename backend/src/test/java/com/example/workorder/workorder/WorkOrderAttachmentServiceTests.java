@@ -39,7 +39,34 @@ class WorkOrderAttachmentServiceTests {
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_status_transitions");
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_order_assignments");
         jdbcTemplate.execute("DROP TABLE IF EXISTS work_orders");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS department_admins");
         jdbcTemplate.execute("DROP TABLE IF EXISTS users");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS teams");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS departments");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS companies");
+        jdbcTemplate.execute("""
+                CREATE TABLE companies (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    name VARCHAR(80) NOT NULL,
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE departments (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    company_id BIGINT NOT NULL,
+                    name VARCHAR(80) NOT NULL,
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE teams (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    department_id BIGINT NOT NULL,
+                    name VARCHAR(80) NOT NULL,
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE
+                )
+                """);
         jdbcTemplate.execute("""
                 CREATE TABLE users (
                     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -47,7 +74,18 @@ class WorkOrderAttachmentServiceTests {
                     nickname VARCHAR(60) NOT NULL,
                     password_hash VARCHAR(100) NOT NULL,
                     role VARCHAR(30) NOT NULL DEFAULT 'USER',
-                    enabled BOOLEAN NOT NULL DEFAULT TRUE
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                    company_id BIGINT NULL,
+                    department_id BIGINT NULL,
+                    team_id BIGINT NULL,
+                    org_confirmed BOOLEAN NOT NULL DEFAULT FALSE
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE department_admins (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    user_id BIGINT NOT NULL,
+                    department_id BIGINT NOT NULL
                 )
                 """);
         jdbcTemplate.execute("""
@@ -60,6 +98,9 @@ class WorkOrderAttachmentServiceTests {
                     status VARCHAR(20) NOT NULL DEFAULT '\u5f85\u5904\u7406',
                     creator_id BIGINT NOT NULL,
                     handler_id BIGINT NULL,
+                    company_id BIGINT NULL,
+                    department_id BIGINT NULL,
+                    team_id BIGINT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 )
@@ -83,22 +124,28 @@ class WorkOrderAttachmentServiceTests {
                     work_order_id BIGINT NOT NULL,
                     uploader_id BIGINT NOT NULL,
                     original_filename VARCHAR(255) NOT NULL,
-                    stored_filename VARCHAR(120) NOT NULL UNIQUE,
+                    stored_filename VARCHAR(500) NOT NULL UNIQUE,
                     content_type VARCHAR(120) NOT NULL,
                     file_size BIGINT NOT NULL,
+                    storage_provider VARCHAR(30) NOT NULL DEFAULT 'local',
+                    bucket_name VARCHAR(120) NULL,
+                    object_key VARCHAR(500) NULL,
+                    deleted_at TIMESTAMP NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """);
-        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role) VALUES (?, ?, ?, ?)",
-                "demo", "Demo", "hash", "USER");
-        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role) VALUES (?, ?, ?, ?)",
-                "other", "Other", "hash", "USER");
-        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role) VALUES (?, ?, ?, ?)",
-                "admin", "Admin", "hash", "ADMIN");
-        jdbcTemplate.update("INSERT INTO work_orders (title, description, type, priority, status, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
-                "Own order", "Own description", "Device", "\u4e2d", PENDING, 1L);
-        jdbcTemplate.update("INSERT INTO work_orders (title, description, type, priority, status, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
-                "Other order", "Sensitive", "Account", "\u9ad8", PENDING, 2L);
+        jdbcTemplate.update("INSERT INTO companies (id, name, enabled) VALUES (1, 'Acme', TRUE)");
+        jdbcTemplate.update("INSERT INTO departments (id, company_id, name, enabled) VALUES (1, 1, 'Finance', TRUE), (2, 1, 'HR', TRUE)");
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, company_id, department_id, org_confirmed) VALUES (?, ?, ?, ?, ?, ?, TRUE)",
+                "demo", "Demo", "hash", "USER", 1L, 1L);
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, company_id, department_id, org_confirmed) VALUES (?, ?, ?, ?, ?, ?, TRUE)",
+                "other", "Other", "hash", "USER", 1L, 2L);
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, company_id, department_id, org_confirmed) VALUES (?, ?, ?, ?, ?, ?, TRUE)",
+                "admin", "Admin", "hash", "ADMIN", 1L, 1L);
+        jdbcTemplate.update("INSERT INTO work_orders (title, description, type, priority, status, creator_id, company_id, department_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "Own order", "Own description", "Device", "\u4e2d", PENDING, 1L, 1L, 1L);
+        jdbcTemplate.update("INSERT INTO work_orders (title, description, type, priority, status, creator_id, company_id, department_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "Other order", "Sensitive", "Account", "\u9ad8", PENDING, 2L, 1L, 2L);
         workOrderService = new WorkOrderService(jdbcTemplate);
         attachmentService = new WorkOrderAttachmentService(
                 jdbcTemplate,
@@ -129,6 +176,9 @@ class WorkOrderAttachmentServiceTests {
         assertThat(storedFilenames.get(0)).isNotEqualTo(storedFilenames.get(1));
         assertThat(Files.exists(uploadDir.resolve(storedFilenames.get(0)))).isTrue();
         assertThat(Files.exists(uploadDir.resolve(storedFilenames.get(1)))).isTrue();
+        assertThat(jdbcTemplate.queryForList(
+                "SELECT COUNT(*) FROM work_order_attachments WHERE storage_provider = 'local' AND object_key = stored_filename",
+                Integer.class)).containsExactly(2);
         assertThat(workOrderService.listVisibleOperationLogs(1L, owner))
                 .extracting(WorkOrderOperationLogResponse::action)
                 .containsExactly("attachment_add", "attachment_add");

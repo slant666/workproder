@@ -24,6 +24,58 @@ services:
       retries: 10
       start_period: 40s
 
+  redis:
+    image: redis:7-alpine
+    container_name: work-order-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no"]
+    ports:
+      - "${WORK_ORDER_REDIS_HOST_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: work-order-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${WORK_ORDER_RABBITMQ_USERNAME:-workorder}
+      RABBITMQ_DEFAULT_PASS: ${WORK_ORDER_RABBITMQ_PASSWORD:-workorder}
+      TZ: Asia/Shanghai
+    ports:
+      - "${WORK_ORDER_RABBITMQ_HOST_PORT:-5672}:5672"
+      - "${WORK_ORDER_RABBITMQ_MANAGEMENT_HOST_PORT:-15672}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  minio:
+    image: minio/minio:latest
+    container_name: work-order-minio
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${WORK_ORDER_MINIO_ACCESS_KEY:-workorder}
+      MINIO_ROOT_PASSWORD: ${WORK_ORDER_MINIO_SECRET_KEY:-workorder-secret}
+      TZ: Asia/Shanghai
+    ports:
+      - "${WORK_ORDER_MINIO_HOST_PORT:-9000}:9000"
+      - "${WORK_ORDER_MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
   backend:
     build:
       context: ./backend
@@ -32,18 +84,48 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     environment:
       WORK_ORDER_DB_URL: jdbc:mysql://mysql:3306/${WORK_ORDER_DB_NAME}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
       WORK_ORDER_DB_USERNAME: ${WORK_ORDER_CONTAINER_DB_USERNAME}
       WORK_ORDER_DB_PASSWORD: ${WORK_ORDER_CONTAINER_DB_PASSWORD}
+      WORK_ORDER_REDIS_HOST: redis
+      WORK_ORDER_REDIS_PORT: 6379
+      WORK_ORDER_REDIS_TIMEOUT: ${WORK_ORDER_REDIS_TIMEOUT:-2s}
+      WORK_ORDER_RABBITMQ_ENABLED: ${WORK_ORDER_RABBITMQ_ENABLED:-true}
+      WORK_ORDER_RABBITMQ_HOST: rabbitmq
+      WORK_ORDER_RABBITMQ_PORT: 5672
+      WORK_ORDER_RABBITMQ_USERNAME: ${WORK_ORDER_RABBITMQ_USERNAME:-workorder}
+      WORK_ORDER_RABBITMQ_PASSWORD: ${WORK_ORDER_RABBITMQ_PASSWORD:-workorder}
       WORK_ORDER_BOOTSTRAP_ADMIN_TOKEN: ${WORK_ORDER_BOOTSTRAP_ADMIN_TOKEN}
       WORK_ORDER_ATTACHMENT_DIR: /app/uploads/work-order-attachments
       WORK_ORDER_ATTACHMENT_MAX_SIZE_BYTES: ${WORK_ORDER_ATTACHMENT_MAX_SIZE_BYTES:-10485760}
+      WORK_ORDER_ATTACHMENT_STORAGE_PROVIDER: ${WORK_ORDER_ATTACHMENT_STORAGE_PROVIDER:-minio}
+      WORK_ORDER_MINIO_ENDPOINT: http://minio:9000
+      WORK_ORDER_MINIO_EXTERNAL_ENDPOINT: http://localhost:${WORK_ORDER_MINIO_HOST_PORT:-9000}
+      WORK_ORDER_MINIO_ACCESS_KEY: ${WORK_ORDER_MINIO_ACCESS_KEY:-workorder}
+      WORK_ORDER_MINIO_SECRET_KEY: ${WORK_ORDER_MINIO_SECRET_KEY:-workorder-secret}
+      WORK_ORDER_MINIO_BUCKET: ${WORK_ORDER_MINIO_BUCKET:-work-order-attachments}
+      WORK_ORDER_MINIO_REGION: ${WORK_ORDER_MINIO_REGION:-us-east-1}
+      SPRING_MAIL_HOST: ${SPRING_MAIL_HOST:-}
+      SPRING_MAIL_PORT: ${SPRING_MAIL_PORT:-465}
+      SPRING_MAIL_USERNAME: ${SPRING_MAIL_USERNAME:-}
+      SPRING_MAIL_PASSWORD: ${SPRING_MAIL_PASSWORD:-}
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH: ${SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH:-true}
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE: ${SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE:-false}
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_ENABLE: ${SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_ENABLE:-true}
+      WORK_ORDER_EMAIL_FROM: ${WORK_ORDER_EMAIL_FROM:-no-reply@work-order.local}
+      WORK_ORDER_EMAIL_DELIVERY_ENABLED: ${WORK_ORDER_EMAIL_DELIVERY_ENABLED:-false}
       TZ: Asia/Shanghai
     volumes:
       - backend-uploads:/app/uploads
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/actuator/health | grep -q '\"status\":\"UP\"'"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/system/status | grep -q 'ok'"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -69,3 +151,4 @@ services:
 volumes:
   mysql-data:
   backend-uploads:
+  minio-data:

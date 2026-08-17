@@ -1,20 +1,32 @@
 package com.example.workorder.auth;
 
+import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 public record RegisterRequest(
-        @NotBlank(message = "用户名不能为空")
-        @Size(min = 4, max = 30, message = "用户名长度必须为 4～30 个字符")
+        @NotBlank(message = "Username is required")
+        @Size(min = 4, max = 30, message = "Username must be 4 to 30 characters")
         String username,
 
-        @NotBlank(message = "昵称不能为空")
+        @NotBlank(message = "Nickname is required")
         String nickname,
 
-        @NotBlank(message = "密码不能为空")
-        @Size(min = 8, message = "密码长度至少 8 位")
+        @NotBlank(message = "Password is required")
+        @Size(min = 8, message = "Password must be at least 8 characters")
         String password,
 
-        @NotBlank(message = "确认密码不能为空")
-        String confirmPassword) {
+        @NotBlank(message = "Password confirmation is required")
+        String confirmPassword,
+
+        @Email(message = "Email format is invalid")
+        String email,
+
+        Long companyId,
+        Long departmentId,
+        Long teamId) {
+
+    public RegisterRequest(String username, String nickname, String password, String confirmPassword) {
+        this(username, nickname, password, confirmPassword, null, null, null, null);
+    }
 }

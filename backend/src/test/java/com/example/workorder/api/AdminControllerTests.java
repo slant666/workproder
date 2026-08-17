@@ -177,7 +177,7 @@ class AdminControllerTests {
     }
 
     @Test
-    void userCannotAssignHandler() {
+    void userCannotReachAssignHandler() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
         AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeWorkOrderStatisticsService(), new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
@@ -205,18 +205,21 @@ class AdminControllerTests {
     }
 
     @Test
-    void userCannotRunAdminStateActions() {
+    void userCannotReachAdminStateActions() {
         FakeWorkOrderService workOrderService = new FakeWorkOrderService();
         AdminController controller = new AdminController(new PermissionService(), workOrderService, new FakeWorkOrderStatisticsService(), new FakeAdminUserService());
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionKeys.CURRENT_USER, new CurrentUser(2L, "demo", "Demo", "USER"));
 
         assertThatThrownBy(() -> controller.acceptWorkOrder(10L, session))
-                .isInstanceOf(ForbiddenException.class);
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage("Access denied");
         assertThatThrownBy(() -> controller.submitWorkOrder(10L, session))
-                .isInstanceOf(ForbiddenException.class);
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage("Access denied");
         assertThatThrownBy(() -> controller.returnWorkOrder(10L, session))
-                .isInstanceOf(ForbiddenException.class);
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage("Access denied");
         assertThat(workOrderService.acceptedId).isNull();
         assertThat(workOrderService.submittedId).isNull();
         assertThat(workOrderService.returnedId).isNull();
@@ -278,8 +281,18 @@ class AdminControllerTests {
         }
 
         @Override
+        public PagedWorkOrderResponse listVisible(WorkOrderListQuery query, CurrentUser currentUser) {
+            this.query = query;
+            return responsePage();
+        }
+
+        @Override
         public PagedWorkOrderResponse listAllForAdmin(WorkOrderListQuery query) {
             this.query = query;
+            return responsePage();
+        }
+
+        private PagedWorkOrderResponse responsePage() {
             return new PagedWorkOrderResponse(
                     List.of(new WorkOrderResponse(
                             1L, "Printer", "Description", "Device", "\u9ad8", "\u5f85\u5904\u7406",

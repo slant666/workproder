@@ -7,7 +7,12 @@ import com.example.workorder.auth.ChangePasswordRequest;
 import com.example.workorder.auth.CurrentUser;
 import com.example.workorder.auth.CsrfTokenResponse;
 import com.example.workorder.auth.CsrfTokenService;
+import com.example.workorder.auth.EmailVerificationRequest;
+import com.example.workorder.auth.EmailVerificationService;
 import com.example.workorder.auth.LoginRequest;
+import com.example.workorder.auth.PasswordResetRequest;
+import com.example.workorder.auth.PasswordResetConfirmRequest;
+import com.example.workorder.auth.PasswordResetService;
 import com.example.workorder.auth.PermissionService;
 import com.example.workorder.auth.ProfileService;
 import com.example.workorder.auth.RegisterRequest;
@@ -38,6 +43,8 @@ public class AuthController {
     private final ProfileService profileService;
     private final PermissionService permissionService;
     private final CsrfTokenService csrfTokenService;
+    private final PasswordResetService passwordResetService;
+    private final EmailVerificationService emailVerificationService;
 
     public AuthController(
             RegistrationService registrationService,
@@ -45,13 +52,17 @@ public class AuthController {
             AuthService authService,
             ProfileService profileService,
             PermissionService permissionService,
-            CsrfTokenService csrfTokenService) {
+            CsrfTokenService csrfTokenService,
+            PasswordResetService passwordResetService,
+            EmailVerificationService emailVerificationService) {
         this.registrationService = registrationService;
         this.bootstrapAdminService = bootstrapAdminService;
         this.authService = authService;
         this.profileService = profileService;
         this.permissionService = permissionService;
         this.csrfTokenService = csrfTokenService;
+        this.passwordResetService = passwordResetService;
+        this.emailVerificationService = emailVerificationService;
     }
 
     @GetMapping("/csrf")
@@ -63,6 +74,24 @@ public class AuthController {
     @ResponseStatus(HttpStatus.CREATED)
     public RegisterResponse register(@Valid @RequestBody RegisterRequest request) {
         return registrationService.register(request);
+    }
+
+    @PostMapping("/password-reset")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void requestPasswordReset(@Valid @RequestBody PasswordResetRequest request) {
+        passwordResetService.requestReset(request);
+    }
+
+    @PostMapping("/email/verify")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void verifyEmail(@Valid @RequestBody EmailVerificationRequest request) {
+        emailVerificationService.verify(request);
+    }
+
+    @PostMapping("/password-reset/confirm")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void confirmPasswordReset(@Valid @RequestBody PasswordResetConfirmRequest request) {
+        passwordResetService.confirmReset(request);
     }
 
     @PostMapping("/bootstrap-admin")

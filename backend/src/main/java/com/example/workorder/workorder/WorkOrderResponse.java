@@ -13,6 +13,17 @@ public record WorkOrderResponse(
         String creatorUsername,
         Long handlerId,
         String handlerUsername,
+        Long companyId,
+        String companyName,
+        Long departmentId,
+        String departmentName,
+        Long teamId,
+        String teamName,
+        Instant firstResponseDueAt,
+        Instant resolutionDueAt,
+        Instant firstRespondedAt,
+        Instant resolvedAt,
+        String slaStatus,
         Instant createdAt) {
 
     public WorkOrderResponse(
@@ -24,7 +35,22 @@ public record WorkOrderResponse(
             String status,
             Long creatorId,
             String creatorUsername,
+            Long handlerId,
+            String handlerUsername,
             Instant createdAt) {
-        this(id, title, description, type, priority, status, creatorId, creatorUsername, null, null, createdAt);
+        this(id, title, description, type, priority, status, creatorId, creatorUsername, handlerId, handlerUsername, null, null, null, null, null, null, null, null, null, null, "NORMAL", createdAt);
+    }
+
+    public WorkOrderResponse(
+            Long id,
+            String title,
+            String description,
+            String type,
+            String priority,
+            String status,
+            Long creatorId,
+            String creatorUsername,
+            Instant createdAt) {
+        this(id, title, description, type, priority, status, creatorId, creatorUsername, null, null, null, null, null, null, null, null, null, null, null, null, "NORMAL", createdAt);
     }
 }

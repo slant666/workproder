@@ -1,9 +1,11 @@
 package com.example.workorder.auth;
 
+import com.example.workorder.organization.OrganizationService;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.util.Locale;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -18,15 +20,23 @@ public class BootstrapAdminService {
 
     private final JdbcTemplate jdbcTemplate;
     private final PasswordEncoder passwordEncoder;
+    private final OrganizationService organizationService;
     private final String bootstrapToken;
 
+    @Autowired
     public BootstrapAdminService(
             JdbcTemplate jdbcTemplate,
             PasswordEncoder passwordEncoder,
+            OrganizationService organizationService,
             @Value("${app.bootstrap.admin-token:}") String bootstrapToken) {
         this.jdbcTemplate = jdbcTemplate;
         this.passwordEncoder = passwordEncoder;
+        this.organizationService = organizationService;
         this.bootstrapToken = bootstrapToken;
+    }
+
+    public BootstrapAdminService(JdbcTemplate jdbcTemplate, PasswordEncoder passwordEncoder, String bootstrapToken) {
+        this(jdbcTemplate, passwordEncoder, new OrganizationService(jdbcTemplate), bootstrapToken);
     }
 
     @Transactional
@@ -40,6 +50,7 @@ public class BootstrapAdminService {
         if (!request.password().equals(request.confirmPassword())) {
             throw new RegistrationException("Passwords do not match");
         }
+        organizationService.validateOrganization(request.companyId(), request.departmentId(), request.teamId(), false);
 
         String username = request.username().trim().toLowerCase(Locale.ROOT);
         String nickname = request.nickname().trim();
@@ -49,12 +60,20 @@ public class BootstrapAdminService {
         try {
             jdbcTemplate.update(connection -> {
                 PreparedStatement statement = connection.prepareStatement(
-                        "INSERT INTO users (username, nickname, password_hash, role) VALUES (?, ?, ?, ?)",
+                        """
+                        INSERT INTO users
+                            (username, nickname, password_hash, role, company_id, department_id, team_id, org_confirmed)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
                         Statement.RETURN_GENERATED_KEYS);
                 statement.setString(1, username);
                 statement.setString(2, nickname);
                 statement.setString(3, passwordHash);
                 statement.setString(4, Role.ADMIN.name());
+                statement.setObject(5, request.companyId());
+                statement.setObject(6, request.departmentId());
+                statement.setObject(7, request.teamId());
+                statement.setBoolean(8, request.departmentId() != null);
                 return statement;
             }, keyHolder);
         } catch (DuplicateKeyException ex) {
@@ -62,7 +81,10 @@ public class BootstrapAdminService {
         }
 
         Number id = keyHolder.getKey();
-        return new RegisterResponse(id == null ? null : id.longValue(), username, nickname, Role.ADMIN.name());
+        return jdbcTemplate.queryForObject(
+                UserSql.REGISTER_SELECT + " WHERE u.id = ?",
+                UserSql::mapRegister,
+                id == null ? null : id.longValue());
     }
 
     private boolean adminExists() {

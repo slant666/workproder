@@ -1,20 +1,32 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
-import { ElMessageBox } from 'element-plus';
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
+import { ElMessageBox, ElNotification } from 'element-plus';
 import {
   acceptWorkOrder,
   assignWorkOrderHandler,
+  fetchCompanies,
   fetchAdminHandlers,
   fetchAdminOverview,
   fetchAdminUsers,
+  fetchDepartments,
+  fetchTeams,
   fetchAdminWorkOrderStatistics,
   fetchAdminWorkOrders,
+  fetchFileJob,
+  downloadImportErrorReport,
+  downloadFileJobResult,
+  downloadUserImportTemplate,
+  exportAdminWorkOrders,
+  importUsers,
   returnWorkOrderToProcessing,
   submitWorkOrderForConfirmation,
+  updateAdminUserOrganization,
   updateAdminUserEnabled,
   updateAdminUserRole,
+  updateDepartmentAdmin,
   type AdminHandler,
   type AdminUser,
+  type OrganizationItem,
   type WorkOrderStatistics,
 } from './api/admin';
 import { checkBackend, checkDatabase, type HealthStatus } from './api/health';
@@ -46,6 +58,14 @@ import {
   updateProfile,
   type CurrentUser,
 } from './api/auth';
+import {
+  fetchNotifications,
+  fetchUnreadNotificationCount,
+  markAllNotificationsRead,
+  markNotificationRead,
+  type NotificationItem,
+} from './api/notifications';
+import { createRealtimeClient, type RealtimeEvent } from './api/realtime';
 
 interface StatusItem {
   label: string;
@@ -62,7 +82,16 @@ const statuses = reactive<Record<'frontend' | 'backend' | 'database', StatusItem
   database: { label: '数据库连接检查中', status: 'checking' },
 });
 
-const registerForm = reactive({ username: '', nickname: '', password: '', confirmPassword: '' });
+const registerForm = reactive({
+  username: '',
+  nickname: '',
+  email: '',
+  password: '',
+  confirmPassword: '',
+  companyId: undefined as number | undefined,
+  departmentId: undefined as number | undefined,
+  teamId: undefined as number | undefined,
+});
 const loginForm = reactive({ username: '', password: '' });
 const profileForm = reactive({ nickname: '' });
 const passwordForm = reactive({ currentPassword: '', newPassword: '', confirmPassword: '' });
@@ -102,7 +131,12 @@ const workOrderTotalPages = ref(0);
 const adminWorkOrders = ref<WorkOrder[]>([]);
 const adminUsers = ref<AdminUser[]>([]);
 const adminHandlers = ref<AdminHandler[]>([]);
+const companies = ref<OrganizationItem[]>([]);
+const departments = ref<OrganizationItem[]>([]);
+const teams = ref<OrganizationItem[]>([]);
 const workOrderStatistics = ref<WorkOrderStatistics | null>(null);
+const notifications = ref<NotificationItem[]>([]);
+const unreadNotificationCount = ref(0);
 const adminUserTotal = ref(0);
 const adminUserPage = ref(1);
 const adminUserPageSize = ref(10);
@@ -122,6 +156,7 @@ const workOrderError = ref('');
 const workOrderMessage = ref('');
 const detailError = ref('');
 const adminError = ref('');
+const adminMessage = ref('');
 const profileError = ref('');
 const profileMessage = ref('');
 const passwordError = ref('');
@@ -131,51 +166,102 @@ const isDetailLoading = ref(false);
 const isAdminUsersLoading = ref(false);
 const isAdminWorkOrdersLoading = ref(false);
 const isAdminHandlersLoading = ref(false);
+const isExcelWorking = ref(false);
+const userImportInput = ref<HTMLInputElement | null>(null);
 const isWorkOrderStatisticsLoading = ref(false);
+const isNotificationsLoading = ref(false);
+const isNotificationsOpen = ref(false);
+const lastImportErrorJobId = ref<number | null>(null);
 const isOperationLogsLoading = ref(false);
 const isCommentsLoading = ref(false);
 const isAttachmentsLoading = ref(false);
 const isWorkOrderActionSubmitting = ref(false);
+const isWorkOrderCreateSubmitting = ref(false);
 const isCommentSubmitting = ref(false);
 const isAttachmentSubmitting = ref(false);
 const isEditingWorkOrder = ref(false);
+const workOrderCreateIdempotencyKey = ref(newIdempotencyKey());
 const workOrdersLoaded = ref(false);
 const adminLoaded = ref(false);
+const realtimeClient = ref<ReturnType<typeof createRealtimeClient> | null>(null);
 const statusItems = computed(() => [statuses.frontend, statuses.backend, statuses.database]);
 const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
+function hasPermission(permission: string) {
+  if (currentUser.value?.permissions?.includes(permission)) return true;
+  if (currentUser.value?.role === 'ADMIN') {
+    return [
+      'ticket:create',
+      'ticket:view',
+      'ticket:update',
+      'ticket:cancel',
+      'ticket:comment',
+      'ticket:attachment',
+      'ticket:assign',
+      'ticket:accept',
+      'ticket:submit',
+      'ticket:return',
+      'ticket:confirm',
+      'ticket:log:view',
+      'user:view',
+      'user:update',
+      'user:disable',
+      'organization:manage',
+      'statistics:view',
+    ].includes(permission);
+  }
+  return [
+    'ticket:create',
+    'ticket:view',
+    'ticket:update',
+    'ticket:cancel',
+    'ticket:comment',
+    'ticket:attachment',
+    'ticket:log:view',
+    'ticket:confirm',
+  ].includes(permission);
+}
+const canOpenAdmin = computed(() =>
+  hasPermission('user:view') ||
+  hasPermission('ticket:assign') ||
+  hasPermission('ticket:accept') ||
+  hasPermission('ticket:submit') ||
+  hasPermission('ticket:return') ||
+  hasPermission('statistics:view') ||
+  hasPermission('organization:manage'),
+);
 const canManageSelectedWorkOrder = computed(() => {
   const workOrder = selectedWorkOrder.value;
   const user = currentUser.value;
-  return Boolean(workOrder && user && workOrder.status === '待处理' && (isAdmin.value || workOrder.creatorId === user.id));
+  return Boolean(workOrder && user && hasPermission('ticket:update') && workOrder.status === '待处理' && (isAdmin.value || workOrder.creatorId === user.id));
 });
 const canAssignSelectedWorkOrder = computed(() => {
   const workOrder = selectedWorkOrder.value;
-  return Boolean(workOrder && isAdmin.value && workOrder.status === '待处理');
+  return Boolean(workOrder && hasPermission('ticket:assign') && workOrder.status === '待处理');
 });
 const selectedAssignmentHandler = computed(() => adminHandlers.value.find((handler) => handler.id === assignmentForm.handlerId));
 const canAcceptSelectedWorkOrder = computed(() => {
   const workOrder = selectedWorkOrder.value;
-  return Boolean(workOrder && isAdmin.value && workOrder.status === '待处理' && (!workOrder.handlerId || workOrder.handlerId === currentUser.value?.id));
+  return Boolean(workOrder && hasPermission('ticket:accept') && workOrder.status === '待处理' && (!workOrder.handlerId || workOrder.handlerId === currentUser.value?.id));
 });
 const canSubmitSelectedWorkOrder = computed(() => {
   const workOrder = selectedWorkOrder.value;
-  return Boolean(workOrder && isAdmin.value && workOrder.status === '处理中' && workOrder.handlerId === currentUser.value?.id);
+  return Boolean(workOrder && hasPermission('ticket:submit') && workOrder.status === '处理中' && workOrder.handlerId === currentUser.value?.id);
 });
 const canReturnSelectedWorkOrder = computed(() => {
   const workOrder = selectedWorkOrder.value;
-  return Boolean(workOrder && isAdmin.value && workOrder.status === '待确认' && workOrder.handlerId === currentUser.value?.id);
+  return Boolean(workOrder && hasPermission('ticket:return') && workOrder.status === '待确认' && workOrder.handlerId === currentUser.value?.id);
 });
 const canConfirmSelectedWorkOrder = computed(() => {
   const workOrder = selectedWorkOrder.value;
-  return Boolean(workOrder && currentUser.value && workOrder.status === '待确认' && workOrder.creatorId === currentUser.value.id);
+  return Boolean(workOrder && currentUser.value && hasPermission('ticket:confirm') && workOrder.status === '待确认' && workOrder.creatorId === currentUser.value.id);
 });
 const canCancelSelectedWorkOrder = computed(() => {
   const workOrder = selectedWorkOrder.value;
-  return Boolean(workOrder && currentUser.value && workOrder.status === '待处理' && workOrder.creatorId === currentUser.value.id);
+  return Boolean(workOrder && currentUser.value && hasPermission('ticket:cancel') && workOrder.status === '待处理' && workOrder.creatorId === currentUser.value.id);
 });
 const canCommentSelectedWorkOrder = computed(() => {
   const workOrder = selectedWorkOrder.value;
-  return Boolean(workOrder && currentUser.value && workOrder.status !== '已取消');
+  return Boolean(workOrder && currentUser.value && hasPermission('ticket:comment') && workOrder.status !== '已取消');
 });
 const pageTitle = computed(() => {
   if (currentView.value === 'admin') return '管理页面';
@@ -188,10 +274,11 @@ const statusStatisticMax = computed(() => Math.max(1, ...(workOrderStatistics.va
 const priorityStatisticMax = computed(() => Math.max(1, ...(workOrderStatistics.value?.priorityCounts.map((item) => item.count) ?? [])));
 const dailyStatisticMax = computed(() => Math.max(1, ...(workOrderStatistics.value?.dailyNewCounts.map((item) => item.count) ?? [])));
 const adminStatisticMax = computed(() => Math.max(1, ...(workOrderStatistics.value?.adminProcessingCounts.map((item) => item.count) ?? [])));
+const slaPriorityStatisticMax = computed(() => Math.max(1, ...(workOrderStatistics.value?.slaOverduePriorityCounts?.map((item) => item.count) ?? [])));
 
 function formatTime(value: string) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value || '无创建时间';
+  if (Number.isNaN(date.getTime())) return value || '无时间';
   return date.toLocaleString('zh-CN', { hour12: false });
 }
 
@@ -254,9 +341,217 @@ function operationActor(log: WorkOrderOperationLog) {
 function roleLabel(role: string) {
   const labels: Record<string, string> = {
     ADMIN: '\u7ba1\u7406\u5458',
-    USER: '\u7528\u6237',
+    USER: '\u666e\u901a\u7528\u6237',
+    CUSTOMER_SERVICE: '\u5ba2\u670d\u4eba\u5458',
+    DEPARTMENT_ADMIN: '\u90e8\u95e8\u7ba1\u7406\u5458',
+    AUDITOR: '\u5ba1\u8ba1\u4eba\u5458',
   };
   return labels[role] || role;
+}
+
+function slaStatusLabel(status?: string | null) {
+  const labels: Record<string, string> = {
+    NORMAL: '\u0053\u004c\u0041 \u6b63\u5e38',
+    NEAR_OVERDUE: '\u0053\u004c\u0041 \u5373\u5c06\u8d85\u65f6',
+    FIRST_RESPONSE_OVERDUE: '\u9996\u6b21\u54cd\u5e94\u8d85\u65f6',
+    RESOLUTION_OVERDUE: '\u89e3\u51b3\u8d85\u65f6',
+    COMPLETED: '\u0053\u004c\u0041 \u5df2\u5b8c\u6210',
+  };
+  return labels[status || 'NORMAL'] || status || '\u0053\u004c\u0041 \u6b63\u5e38';
+}
+
+function slaSummary(workOrder: WorkOrder) {
+  const firstResponse = workOrder.firstResponseDueAt ? `\u9996\u54cd ${formatTime(workOrder.firstResponseDueAt)}` : '\u9996\u54cd\u672a\u8bbe\u7f6e';
+  const resolution = workOrder.resolutionDueAt ? `\u89e3\u51b3 ${formatTime(workOrder.resolutionDueAt)}` : '\u89e3\u51b3\u672a\u8bbe\u7f6e';
+  return `${slaStatusLabel(workOrder.slaStatus)} \u00b7 ${firstResponse} \u00b7 ${resolution}`;
+}
+async function loadUnreadNotifications() {
+  if (!currentUser.value) {
+    unreadNotificationCount.value = 0;
+    return;
+  }
+  unreadNotificationCount.value = await fetchUnreadNotificationCount().catch(() => 0);
+}
+
+async function loadNotifications() {
+  if (!currentUser.value) return;
+  isNotificationsLoading.value = true;
+  try {
+    const response = await fetchNotifications();
+    notifications.value = response.items;
+    await loadUnreadNotifications();
+  } finally {
+    isNotificationsLoading.value = false;
+  }
+}
+
+function startRealtime() {
+  if (!currentUser.value || realtimeClient.value) return;
+  realtimeClient.value = createRealtimeClient({
+    onEvent: handleRealtimeEvent,
+    onAuthExpired: handleRealtimeAuthExpired,
+  });
+  realtimeClient.value.start();
+}
+
+function stopRealtime() {
+  realtimeClient.value?.stop();
+  realtimeClient.value = null;
+}
+
+function handleRealtimeEvent(event: RealtimeEvent) {
+  if (!currentUser.value) return;
+  if (typeof event.unreadCount === 'number') {
+    unreadNotificationCount.value = event.unreadCount;
+  }
+  if (event.type === 'NOTIFICATION_CREATED') {
+    handleRealtimeNotification(event);
+    return;
+  }
+  if (event.type === 'UNREAD_COUNT_CHANGED') {
+    return;
+  }
+  if (event.type === 'AUTH_CONTEXT_CHANGED') {
+    void refreshAuthContext();
+    return;
+  }
+  if (['WORK_ORDER_CREATED', 'WORK_ORDER_ASSIGNED', 'WORK_ORDER_STATUS_CHANGED', 'COMMENT_CREATED'].includes(event.type)) {
+    void refreshRealtimeWorkOrderState(event);
+  }
+}
+
+function handleRealtimeNotification(event: RealtimeEvent) {
+  if (isNotificationsOpen.value) {
+    void loadNotifications();
+  }
+  const title = typeof event.payload?.title === 'string' ? event.payload.title : '新通知';
+  const content = typeof event.payload?.content === 'string' ? event.payload.content : '';
+  ElNotification({
+    title,
+    message: content,
+    type: event.payload?.notificationType === 'WORK_ORDER_ASSIGNED' ? 'success' : 'info',
+    duration: 5000,
+    onClick: () => {
+      if (event.entityId) {
+        void openWorkOrderDetail(event.entityId);
+      }
+    },
+  });
+}
+
+async function refreshRealtimeWorkOrderState(event: RealtimeEvent) {
+  if (currentView.value === 'workOrders' && workOrdersLoaded.value && !isWorkOrdersLoading.value) {
+    await openWorkOrders();
+  }
+  if (currentView.value === 'admin' && adminLoaded.value && !isAdminWorkOrdersLoading.value && hasPermission('ticket:assign')) {
+    await loadAdminWorkOrders();
+  }
+  if (event.entityId && selectedWorkOrder.value?.id === event.entityId && !isDetailLoading.value) {
+    try {
+      selectedWorkOrder.value = await fetchWorkOrderDetail(event.entityId);
+      assignmentForm.handlerId = selectedWorkOrder.value.handlerId ?? undefined;
+      await Promise.all([loadComments(event.entityId), loadOperationLogs(event.entityId)]);
+    } catch {
+      selectedWorkOrder.value = null;
+      detailError.value = '当前工单已不可见或已被更新，请返回列表刷新';
+    }
+  }
+  if (hasPermission('statistics:view') && currentView.value === 'admin') {
+    await loadWorkOrderStatistics().catch(() => undefined);
+  }
+}
+
+async function refreshAuthContext() {
+  try {
+    currentUser.value = await getCurrentUser();
+    if (!currentUser.value) {
+      await handleRealtimeAuthExpired();
+      return;
+    }
+    profileForm.nickname = currentUser.value.nickname;
+    await Promise.all([
+      loadUnreadNotifications(),
+      currentView.value === 'workOrders' ? openWorkOrders() : Promise.resolve(),
+      currentView.value === 'admin' && canOpenAdmin.value ? openAdmin() : Promise.resolve(),
+      selectedWorkOrder.value ? openWorkOrderDetail(selectedWorkOrder.value.id) : Promise.resolve(),
+    ]);
+  } catch {
+    await handleRealtimeAuthExpired();
+  }
+}
+
+async function handleRealtimeAuthExpired() {
+  stopRealtime();
+  currentUser.value = null;
+  workOrders.value = [];
+  adminWorkOrders.value = [];
+  selectedWorkOrder.value = null;
+  notifications.value = [];
+  unreadNotificationCount.value = 0;
+  currentView.value = 'login';
+  loginError.value = '登录状态已过期，请重新登录';
+}
+
+async function toggleNotifications() {
+  isNotificationsOpen.value = !isNotificationsOpen.value;
+  if (isNotificationsOpen.value) {
+    await loadNotifications();
+  }
+}
+
+async function openNotification(notification: NotificationItem) {
+  if (!notification.read) {
+    await markNotificationRead(notification.id).catch(() => undefined);
+    await loadUnreadNotifications();
+  }
+  isNotificationsOpen.value = false;
+  if (notification.workOrderId) {
+    await openWorkOrderDetail(notification.workOrderId);
+  }
+}
+
+async function markAllNotificationsReadAction() {
+  await markAllNotificationsRead();
+  notifications.value = notifications.value.map((item) => ({ ...item, read: true }));
+  unreadNotificationCount.value = 0;
+}
+
+const currentRoleLabels = computed(() => {
+  const roles = currentUser.value?.roles?.length ? currentUser.value.roles : currentUser.value?.role ? [currentUser.value.role] : [];
+  return roles.join(' / ');
+});
+
+function organizationLabel(item: { departmentName?: string | null; teamName?: string | null; companyName?: string | null }) {
+  const parts = [item.companyName, item.departmentName, item.teamName].filter(Boolean);
+  return parts.length > 0 ? parts.join(' / ') : '未确认组织';
+}
+
+function orgStatusLabel(orgConfirmed?: boolean) {
+  return orgConfirmed ? '已确认' : '待管理员确认';
+}
+
+async function loadOrganizations() {
+  try {
+    companies.value = await fetchCompanies();
+    departments.value = await fetchDepartments(registerForm.companyId);
+    teams.value = await fetchTeams(registerForm.departmentId);
+  } catch {
+    companies.value = [];
+    departments.value = [];
+    teams.value = [];
+  }
+}
+
+async function changeRegisterCompany() {
+  registerForm.departmentId = undefined;
+  registerForm.teamId = undefined;
+  departments.value = await fetchDepartments(registerForm.companyId).catch(() => []);
+  teams.value = [];
+}
+
+async function changeRegisterDepartment() {
+  registerForm.teamId = undefined;
+  teams.value = await fetchTeams(registerForm.departmentId).catch(() => []);
 }
 
 function operationChangeText(log: WorkOrderOperationLog) {
@@ -270,8 +565,10 @@ function operationChangeText(log: WorkOrderOperationLog) {
 function validateRegisterForm() {
   const username = registerForm.username.trim();
   const nickname = registerForm.nickname.trim();
+  const email = registerForm.email.trim();
   if (username.length < 4 || username.length > 30) return '用户名长度必须为 4 到 30 个字符';
   if (!nickname) return '昵称不能为空';
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return '邮箱格式不正确';
   if (registerForm.password.length < 8) return '密码长度至少 8 位';
   if (registerForm.password !== registerForm.confirmPassword) return '两次输入的密码不一致';
   return '';
@@ -294,10 +591,14 @@ async function submitRegister() {
     await registerUser({
       username: registerForm.username.trim(),
       nickname: registerForm.nickname.trim(),
+      email: registerForm.email.trim() || undefined,
       password: registerForm.password,
       confirmPassword: registerForm.confirmPassword,
+      companyId: registerForm.companyId,
+      departmentId: registerForm.departmentId,
+      teamId: registerForm.teamId,
     });
-    successMessage.value = '注册成功，请登录';
+    successMessage.value = registerForm.email.trim() ? '注册成功，验证码邮件已进入发送队列，请登录后完成邮箱验证' : '注册成功，请登录';
     currentView.value = 'login';
     loginForm.username = registerForm.username.trim();
   } catch (error) {
@@ -318,7 +619,8 @@ async function submitLogin() {
   try {
     currentUser.value = await loginUser({ username: loginForm.username.trim(), password: loginForm.password });
     profileForm.nickname = currentUser.value.nickname;
-    await openWorkOrders();
+    startRealtime();
+    await Promise.all([openWorkOrders(), loadUnreadNotifications()]);
   } catch (error) {
     currentUser.value = null;
     loginError.value = error instanceof Error ? error.message : '用户名或密码错误';
@@ -392,7 +694,7 @@ function optionalPositiveNumber(value: number | undefined) {
 }
 
 async function loadWorkOrderStatistics() {
-  if (!currentUser.value || !isAdmin.value) {
+  if (!currentUser.value || !hasPermission('statistics:view')) {
     currentView.value = 'login';
     return;
   }
@@ -416,7 +718,7 @@ function applyStatisticsFilters() {
 }
 
 async function loadAdminHandlers() {
-  if (!currentUser.value || !isAdmin.value) {
+  if (!currentUser.value || !(hasPermission('ticket:assign') || hasPermission('ticket:accept') || hasPermission('ticket:submit') || hasPermission('ticket:return'))) {
     adminHandlers.value = [];
     return;
   }
@@ -432,7 +734,7 @@ async function loadAdminHandlers() {
 }
 
 async function loadAdminUsers(options: { resetPage?: boolean } = {}) {
-  if (!currentUser.value || !isAdmin.value) {
+  if (!currentUser.value || !hasPermission('user:view')) {
     currentView.value = 'login';
     return;
   }
@@ -464,6 +766,52 @@ async function loadAdminUsers(options: { resetPage?: boolean } = {}) {
 
 function applyAdminUserFilters() {
   void loadAdminUsers({ resetPage: true });
+}
+
+async function downloadUserTemplate() {
+  isExcelWorking.value = true;
+  adminError.value = '';
+  try {
+    await downloadUserImportTemplate();
+    adminMessage.value = '用户导入模板已下载';
+  } catch (error) {
+    adminError.value = error instanceof Error ? error.message : '下载用户导入模板失败';
+  } finally {
+    isExcelWorking.value = false;
+  }
+}
+
+async function uploadUserImport(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  isExcelWorking.value = true;
+  adminError.value = '';
+  try {
+    const job = await importUsers(file);
+    lastImportErrorJobId.value = job.hasErrorReport ? job.id : null;
+    adminMessage.value = `导入完成：成功 ${job.successCount} 条，失败 ${job.failedCount} 条`;
+    await Promise.all([loadAdminUsers({ resetPage: true }), loadAdminHandlers()]);
+  } catch (error) {
+    adminError.value = error instanceof Error ? error.message : '导入用户失败';
+  } finally {
+    isExcelWorking.value = false;
+  }
+}
+
+async function downloadLastImportErrorReport() {
+  if (!lastImportErrorJobId.value) return;
+  isExcelWorking.value = true;
+  adminError.value = '';
+  try {
+    await downloadImportErrorReport(lastImportErrorJobId.value);
+    adminMessage.value = '错误报告已下载';
+  } catch (error) {
+    adminError.value = error instanceof Error ? error.message : '下载错误报告失败';
+  } finally {
+    isExcelWorking.value = false;
+  }
 }
 
 function changeAdminUserPage(page: number) {
@@ -537,8 +885,79 @@ async function setAdminUserRole(user: AdminUser, role: 'USER' | 'ADMIN') {
   }
 }
 
+async function setAdminUserOrganizationConfirmed(user: AdminUser, orgConfirmed: boolean) {
+  if (orgConfirmed && !user.departmentId) {
+    adminError.value = '用户还没有申请部门，不能确认组织归属';
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定${orgConfirmed ? '确认' : '取消确认'}用户「${user.nickname}（${user.username}）」的组织归属吗？`,
+      orgConfirmed ? '确认组织归属' : '取消组织确认',
+      {
+        confirmButtonText: orgConfirmed ? '确认归属' : '取消确认',
+        cancelButtonText: '返回',
+        type: 'warning',
+      },
+    );
+  } catch {
+    return;
+  }
+
+  isAdminUsersLoading.value = true;
+  adminError.value = '';
+  try {
+    await updateAdminUserOrganization(user.id, {
+      companyId: user.companyId ?? null,
+      departmentId: user.departmentId ?? null,
+      teamId: user.teamId ?? null,
+      orgConfirmed,
+    });
+    await Promise.all([loadAdminUsers(), loadAdminHandlers()]);
+  } catch (error) {
+    adminError.value = error instanceof Error ? error.message : '更新用户组织归属失败';
+  } finally {
+    isAdminUsersLoading.value = false;
+  }
+}
+
+async function setUserDepartmentAdmin(user: AdminUser, departmentAdmin: boolean) {
+  if (!user.departmentId) {
+    adminError.value = '用户还没有部门，不能授权部门管理员';
+    return;
+  }
+  if (departmentAdmin && !user.orgConfirmed) {
+    adminError.value = '请先确认用户组织归属，再授权部门管理员';
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定${departmentAdmin ? '授权' : '取消'}用户「${user.nickname}（${user.username}）」的部门管理员权限吗？`,
+      departmentAdmin ? '授权部门管理员' : '取消部门管理员',
+      {
+        confirmButtonText: departmentAdmin ? '确认授权' : '取消授权',
+        cancelButtonText: '返回',
+        type: 'warning',
+      },
+    );
+  } catch {
+    return;
+  }
+
+  isAdminUsersLoading.value = true;
+  adminError.value = '';
+  try {
+    await updateDepartmentAdmin(user.id, user.departmentId, departmentAdmin);
+    await Promise.all([loadAdminUsers(), loadAdminHandlers()]);
+  } catch (error) {
+    adminError.value = error instanceof Error ? error.message : '更新部门管理员授权失败';
+  } finally {
+    isAdminUsersLoading.value = false;
+  }
+}
+
 async function loadAdminWorkOrders(options: { resetPage?: boolean } = {}) {
-  if (!currentUser.value || !isAdmin.value) {
+  if (!currentUser.value || !hasPermission('ticket:assign')) {
     currentView.value = 'login';
     return;
   }
@@ -548,7 +967,7 @@ async function loadAdminWorkOrders(options: { resetPage?: boolean } = {}) {
   isAdminWorkOrdersLoading.value = true;
   adminError.value = '';
   try {
-    if (adminHandlers.value.length === 0) {
+    if (hasPermission('ticket:assign') && adminHandlers.value.length === 0) {
       await loadAdminHandlers();
     }
     const response = await fetchAdminWorkOrders({
@@ -584,6 +1003,46 @@ function applyAdminWorkOrderFilters() {
   void loadAdminWorkOrders({ resetPage: true });
 }
 
+async function exportFilteredAdminWorkOrders() {
+  isExcelWorking.value = true;
+  adminError.value = '';
+  try {
+    const job = await exportAdminWorkOrders({
+      keyword: adminWorkOrderFilters.keyword,
+      status: adminWorkOrderFilters.status,
+      priority: adminWorkOrderFilters.priority,
+      creatorId: optionalPositiveNumber(adminWorkOrderFilters.creatorId),
+      handlerId: optionalPositiveNumber(adminWorkOrderFilters.handlerId),
+      createdFrom: adminWorkOrderFilters.createdFrom,
+      createdTo: adminWorkOrderFilters.createdTo,
+      sort: adminWorkOrderFilters.sort,
+    });
+    adminMessage.value = `导出任务已创建：#${job.id}`;
+    const finishedJob = await waitForFileJob(job.id);
+    if (finishedJob.status === 'SUCCESS') {
+      await downloadFileJobResult(finishedJob.id, `work-orders-${finishedJob.id}.xlsx`);
+      adminMessage.value = '工单导出文件已下载';
+    } else {
+      throw new Error(finishedJob.errorMessage || '导出工单失败');
+    }
+  } catch (error) {
+    adminError.value = error instanceof Error ? error.message : '导出工单失败';
+  } finally {
+    isExcelWorking.value = false;
+  }
+}
+
+async function waitForFileJob(jobId: number) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const job = await fetchFileJob(jobId);
+    if (job.status === 'SUCCESS' || job.status === 'FAILED') {
+      return job;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+  }
+  throw new Error('导出任务正在后台处理中，请稍后刷新后重试下载');
+}
+
 function changeAdminWorkOrderPage(page: number) {
   adminWorkOrderPage.value = page;
   void loadAdminWorkOrders();
@@ -613,7 +1072,7 @@ async function openWorkOrderDetail(id: number) {
     selectedWorkOrder.value = await fetchWorkOrderDetail(id);
     assignmentForm.handlerId = selectedWorkOrder.value.handlerId ?? undefined;
     await Promise.all([loadOperationLogs(id), loadComments(id), loadAttachments(id)]);
-    if (isAdmin.value && adminHandlers.value.length === 0) {
+    if (hasPermission('ticket:assign') && adminHandlers.value.length === 0) {
       await loadAdminHandlers();
     }
   } catch (error) {
@@ -670,7 +1129,7 @@ async function submitHandlerAssignment() {
   const oldHandler = workOrder.handlerUsername || '未分配';
   const newHandler = `${handler.nickname}（${handler.username}）`;
   try {
-    await ElMessageBox.confirm(
+      await ElMessageBox.confirm(
       `确定将工单「${workOrder.title}」的处理人从「${oldHandler}」分配为「${newHandler}」吗？`,
       '分配处理人',
       {
@@ -723,7 +1182,7 @@ async function submitComment() {
 
 async function deleteComment(commentId: number) {
   const workOrder = selectedWorkOrder.value;
-  if (!workOrder || !isAdmin.value) return;
+  if (!workOrder || !hasPermission('ticket:assign')) return;
   try {
     await ElMessageBox.confirm('\u786e\u5b9a\u5220\u9664\u8fd9\u6761\u8bc4\u8bba\u5417\uff1f', '\u5220\u9664\u8bc4\u8bba', {
       confirmButtonText: '\u786e\u5b9a',
@@ -796,7 +1255,7 @@ async function runStateAction(
   try {
     const updated = await action();
     applyUpdatedWorkOrder(updated);
-    await Promise.all([loadOperationLogs(updated.id), isAdmin.value ? loadWorkOrderStatistics() : Promise.resolve()]);
+    await Promise.all([loadOperationLogs(updated.id), hasPermission('statistics:view') ? loadWorkOrderStatistics() : Promise.resolve()]);
     isEditingWorkOrder.value = false;
     workOrderMessage.value = success;
   } catch (error) {
@@ -835,6 +1294,7 @@ function submitCompletionConfirmation() {
 }
 
 async function submitWorkOrder() {
+  if (isWorkOrderCreateSubmitting.value) return;
   workOrderError.value = '';
   workOrderMessage.value = '';
   if (!workOrderForm.title.trim()) {
@@ -849,22 +1309,34 @@ async function submitWorkOrder() {
     workOrderError.value = '优先级只能是低、中、高';
     return;
   }
+  isWorkOrderCreateSubmitting.value = true;
   try {
     const created = await createWorkOrder({
       title: workOrderForm.title.trim(),
       description: workOrderForm.description.trim(),
       type: workOrderForm.type.trim(),
       priority: workOrderForm.priority,
+      idempotencyKey: workOrderCreateIdempotencyKey.value,
     });
     workOrderForm.title = '';
     workOrderForm.description = '';
     workOrderForm.type = '';
     workOrderForm.priority = '中';
+    workOrderCreateIdempotencyKey.value = newIdempotencyKey();
     workOrderMessage.value = '工单创建成功';
     await openWorkOrderDetail(created.id);
   } catch (error) {
     workOrderError.value = error instanceof Error ? error.message : '创建工单失败';
+  } finally {
+    isWorkOrderCreateSubmitting.value = false;
   }
+}
+
+function newIdempotencyKey() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  return `wo-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function startEditingWorkOrder() {
@@ -939,7 +1411,7 @@ async function submitWorkOrderCancellation() {
   try {
     const updated = await cancelWorkOrder(workOrder.id);
     applyUpdatedWorkOrder(updated);
-    await Promise.all([loadOperationLogs(updated.id), isAdmin.value ? loadWorkOrderStatistics() : Promise.resolve()]);
+    await Promise.all([loadOperationLogs(updated.id), hasPermission('statistics:view') ? loadWorkOrderStatistics() : Promise.resolve()]);
     isEditingWorkOrder.value = false;
     workOrderMessage.value = '工单已取消';
   } catch (error) {
@@ -959,7 +1431,7 @@ function openProfile() {
 }
 
 async function openAdmin() {
-  if (!currentUser.value) {
+  if (!currentUser.value || !canOpenAdmin.value) {
     currentView.value = 'login';
     return;
   }
@@ -967,7 +1439,13 @@ async function openAdmin() {
   try {
     await fetchAdminOverview();
     currentView.value = 'admin';
-    await Promise.all([loadWorkOrderStatistics(), loadAdminUsers(), loadAdminHandlers(), loadAdminWorkOrders()]);
+    await Promise.all([
+      hasPermission('organization:manage') ? loadOrganizations() : Promise.resolve(),
+      hasPermission('statistics:view') ? loadWorkOrderStatistics() : Promise.resolve(),
+      hasPermission('user:view') ? loadAdminUsers() : Promise.resolve(),
+      hasPermission('ticket:assign') ? loadAdminHandlers() : Promise.resolve(),
+      hasPermission('ticket:assign') || hasPermission('ticket:accept') || hasPermission('ticket:submit') || hasPermission('ticket:return') ? loadAdminWorkOrders() : Promise.resolve(),
+    ]);
   } catch (error) {
     adminLoaded.value = false;
     adminError.value = error instanceof Error ? error.message : '获取管理页面失败';
@@ -1003,6 +1481,7 @@ async function submitPassword() {
   }
   try {
     await changePassword({ ...passwordForm });
+    stopRealtime();
     currentUser.value = null;
     workOrdersLoaded.value = false;
     adminLoaded.value = false;
@@ -1018,6 +1497,7 @@ async function submitPassword() {
 }
 
 async function logout() {
+  stopRealtime();
   await logoutUser();
   currentUser.value = null;
   workOrders.value = [];
@@ -1026,6 +1506,9 @@ async function logout() {
   workOrderComments.value = [];
   workOrderAttachments.value = [];
   workOrderStatistics.value = null;
+  notifications.value = [];
+  unreadNotificationCount.value = 0;
+  isNotificationsOpen.value = false;
   commentForm.content = '';
   workOrdersLoaded.value = false;
   adminLoaded.value = false;
@@ -1038,7 +1521,8 @@ async function restoreLoginState() {
     currentUser.value = await getCurrentUser();
     if (currentUser.value) {
       profileForm.nickname = currentUser.value.nickname;
-      await openWorkOrders();
+      startRealtime();
+      await Promise.all([openWorkOrders(), loadUnreadNotifications()]);
     }
   } catch {
     currentUser.value = null;
@@ -1072,6 +1556,11 @@ async function refreshHealth() {
 onMounted(() => {
   void refreshHealth();
   void restoreLoginState();
+  void loadOrganizations();
+});
+
+onUnmounted(() => {
+  stopRealtime();
 });
 </script>
 
@@ -1081,14 +1570,14 @@ onMounted(() => {
       <section class="status-panel">
         <p class="eyebrow">Work Order System</p>
         <h1>工单管理系统</h1>
-        <p class="summary">开发环境连通性检查</p>
-        <ul class="status-list" aria-label="系统连接状态">
+        <p class="summary">开发环境连通性检</p>
+        <ul class="status-list" aria-label="系统连接状">
           <li v-for="item in statusItems" :key="item.label" class="status-item" :class="`status-${item.status}`">
             <span class="status-icon" aria-hidden="true"></span>
             <span>{{ item.label }}</span>
           </li>
         </ul>
-        <el-button type="primary" @click="refreshHealth">重新检查</el-button>
+        <el-button type="primary" @click="refreshHealth">重新检</el-button>
       </section>
 
       <section class="auth-panel">
@@ -1097,10 +1586,26 @@ onMounted(() => {
           <h2>用户注册</h2>
           <el-alert v-if="registerError" :title="registerError" type="error" show-icon :closable="false" />
           <el-form class="auth-form" label-position="top" @submit.prevent="submitRegister">
-            <el-form-item label="用户名"><el-input v-model="registerForm.username" maxlength="30" placeholder="请输入 4 到 30 个字符" /></el-form-item>
+            <el-form-item label="用户"><el-input v-model="registerForm.username" maxlength="30" placeholder="请输入 4 到 30 个字符" /></el-form-item>
             <el-form-item label="昵称"><el-input v-model="registerForm.nickname" maxlength="60" placeholder="请输入昵称" /></el-form-item>
+            <el-form-item label="邮箱"><el-input v-model="registerForm.email" maxlength="160" placeholder="用于接收验证码和工单邮件" /></el-form-item>
             <el-form-item label="密码"><el-input v-model="registerForm.password" type="password" show-password placeholder="至少 8 位" /></el-form-item>
             <el-form-item label="确认密码"><el-input v-model="registerForm.confirmPassword" type="password" show-password placeholder="请再次输入密码" /></el-form-item>
+            <el-form-item label="申请公司">
+              <el-select v-model="registerForm.companyId" clearable placeholder="可选，需管理员确认" @change="changeRegisterCompany">
+                <el-option v-for="company in companies" :key="company.id" :label="company.name" :value="company.id" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="申请部门">
+              <el-select v-model="registerForm.departmentId" clearable placeholder="可选，需管理员确认" @change="changeRegisterDepartment">
+                <el-option v-for="department in departments" :key="department.id" :label="department.name" :value="department.id" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="申请团队">
+              <el-select v-model="registerForm.teamId" clearable placeholder="可选，需管理员确">
+                <el-option v-for="team in teams" :key="team.id" :label="team.name" :value="team.id" />
+              </el-select>
+            </el-form-item>
             <div class="form-actions"><el-button native-type="submit" type="primary" :loading="isSubmitting">注册</el-button><el-button @click="currentView = 'login'">去登录</el-button></div>
           </el-form>
         </template>
@@ -1111,7 +1616,7 @@ onMounted(() => {
           <el-alert v-if="successMessage" :title="successMessage" type="success" show-icon :closable="false" />
           <el-alert v-if="loginError || workOrderError" :title="loginError || workOrderError" type="error" show-icon :closable="false" />
           <el-form class="auth-form" label-position="top" @submit.prevent="submitLogin">
-            <el-form-item label="用户名"><el-input v-model="loginForm.username" placeholder="请输入用户名" /></el-form-item>
+            <el-form-item label="用户"><el-input v-model="loginForm.username" placeholder="请输入用户名" /></el-form-item>
             <el-form-item label="密码"><el-input v-model="loginForm.password" type="password" show-password placeholder="请输入密码" /></el-form-item>
             <div class="form-actions"><el-button native-type="submit" type="primary" :loading="isSubmitting">登录</el-button><el-button @click="currentView = 'register'">去注册</el-button></div>
           </el-form>
@@ -1123,17 +1628,43 @@ onMounted(() => {
               <p class="eyebrow">{{ currentView === 'admin' ? 'Admin' : currentView === 'profile' ? 'Profile' : 'Work Orders' }}</p>
               <h2>{{ pageTitle }}</h2>
             </div>
-            <el-button @click="logout">退出登录</el-button>
+            <el-button @click="logout">退出登</el-button>
           </div>
 
-          <nav class="role-menu" aria-label="功能菜单">
+                    <nav class="role-menu" aria-label="功能菜单">
             <el-button :type="currentView === 'workOrders' || currentView === 'workOrderDetail' ? 'primary' : 'default'" @click="openWorkOrders">工单</el-button>
             <el-button :type="currentView === 'profile' ? 'primary' : 'default'" @click="openProfile">个人资料</el-button>
-            <el-button v-if="isAdmin" :type="currentView === 'admin' ? 'primary' : 'default'" @click="openAdmin">管理</el-button>
+            <el-button v-if="canOpenAdmin" :type="currentView === 'admin' ? 'primary' : 'default'" @click="openAdmin">管理</el-button>
+            <el-button :type="isNotificationsOpen ? 'primary' : 'default'" @click="toggleNotifications">
+              通知<span v-if="unreadNotificationCount > 0">（{{ unreadNotificationCount }}）</span>
+            </el-button>
           </nav>
 
-          <p class="summary">欢迎，{{ currentUser?.nickname }}。当前角色：{{ currentUser?.role }}。</p>
+          <section v-if="isNotificationsOpen" class="profile-section notification-panel">
+            <div class="section-header">
+              <h3>站内通知</h3>
+              <el-button size="small" :disabled="notifications.length === 0" @click="markAllNotificationsReadAction">全部已读</el-button>
+            </div>
+            <p v-if="isNotificationsLoading" class="empty-state">通知加载中</p>
+            <p v-else-if="notifications.length === 0" class="empty-state">暂无通知</p>
+            <div v-else class="notification-list">
+              <button
+                v-for="notification in notifications"
+                :key="notification.id"
+                class="notification-item"
+                :class="{ unread: !notification.read }"
+                type="button"
+                @click="openNotification(notification)"
+              >
+                <span class="item-title">{{ notification.title }}</span>
+                <span class="item-meta">{{ notification.content }} · {{ formatTime(notification.createdAt) }}</span>
+              </button>
+            </div>
+          </section>
+
+          <p class="summary">欢迎，{{ currentUser?.nickname }}。当前角色：{{ currentRoleLabels }}。</p>
           <el-alert v-if="adminError" :title="adminError" type="error" show-icon :closable="false" />
+          <el-alert v-if="adminMessage" :title="adminMessage" type="success" show-icon :closable="false" />
 
           <template v-if="currentView === 'admin'">
             <section class="profile-section">
@@ -1142,7 +1673,7 @@ onMounted(() => {
                 <el-button size="small" :loading="isWorkOrderStatisticsLoading" @click="loadWorkOrderStatistics()">刷新</el-button>
               </div>
               <el-form class="statistics-filters" label-position="top" @submit.prevent="applyStatisticsFilters">
-                <el-form-item label="开始日期">
+                <el-form-item label="开始日">
                   <el-input v-model="adminStatisticsFilters.createdFrom" type="date" clearable aria-label="统计开始日期" />
                 </el-form-item>
                 <el-form-item label="结束日期">
@@ -1151,7 +1682,7 @@ onMounted(() => {
                 <el-button native-type="submit" type="primary" :loading="isWorkOrderStatisticsLoading">应用日期范围</el-button>
               </el-form>
               <p class="item-meta">统计口径：平均处理时长按{{ workOrderStatistics?.averageProcessingRule || '首次接单到用户确认完成' }}；超时按{{ workOrderStatistics?.overdueRule || '状态为待处理且创建时间超过 48 小时' }}。</p>
-              <p v-if="isWorkOrderStatisticsLoading" class="empty-text">工单统计加载中</p>
+              <p v-if="isWorkOrderStatisticsLoading" class="empty-text">工单统计加载</p>
               <template v-else-if="workOrderStatistics">
                 <div class="statistics-card-grid">
                   <article class="statistics-card">
@@ -1166,11 +1697,23 @@ onMounted(() => {
                     <span>超时未处理</span>
                     <strong>{{ workOrderStatistics.overdueUnhandledCount }}</strong>
                   </article>
+                  <article class="statistics-card warning">
+                    <span>SLA 即将超时</span>
+                    <strong>{{ workOrderStatistics.slaNearOverdueCount || 0 }}</strong>
+                  </article>
+                  <article class="statistics-card warning">
+                    <span>首次响应超时</span>
+                    <strong>{{ workOrderStatistics.firstResponseOverdueCount || 0 }}</strong>
+                  </article>
+                  <article class="statistics-card warning">
+                    <span>解决超时</span>
+                    <strong>{{ workOrderStatistics.resolutionOverdueCount || 0 }}</strong>
+                  </article>
                 </div>
                 <p v-if="!hasWorkOrderStatistics" class="empty-text">当前日期范围内暂无工单统计数据</p>
                 <div class="statistics-charts" v-else>
-                  <section class="statistics-chart" aria-label="各状态数量">
-                    <h4>各状态数量</h4>
+                  <section class="statistics-chart" aria-label="各状态数">
+                    <h4>各状态数</h4>
                     <div v-for="item in workOrderStatistics.statusCounts" :key="item.label" class="bar-row">
                       <span>{{ item.label }}</span>
                       <div class="bar-track"><span class="bar-fill" :style="{ width: statisticBarWidth(item.count, statusStatisticMax) }"></span></div>
@@ -1196,10 +1739,19 @@ onMounted(() => {
                   </section>
                   <section class="statistics-chart" aria-label="各管理员处理数量">
                     <h4>各管理员处理数量</h4>
-                    <p v-if="workOrderStatistics.adminProcessingCounts.length === 0" class="empty-text">暂无管理员处理数据</p>
+                    <p v-if="workOrderStatistics.adminProcessingCounts.length === 0" class="empty-text">暂无管理员处理数</p>
                     <div v-for="item in workOrderStatistics.adminProcessingCounts" :key="item.handlerId" class="bar-row">
-                      <span>{{ item.handlerNickname }}（{{ item.handlerUsername }}）</span>
+                      <span>{{ item.handlerNickname }}（{{ item.handlerUsername }}</span>
                       <div class="bar-track"><span class="bar-fill admin" :style="{ width: statisticBarWidth(item.count, adminStatisticMax) }"></span></div>
+                      <strong>{{ item.count }}</strong>
+                    </div>
+                  </section>
+                  <section class="statistics-chart" aria-label="SLA 超时优先级">
+                    <h4>SLA 超时优先级</h4>
+                    <p v-if="(workOrderStatistics.slaOverduePriorityCounts || []).length === 0" class="empty-text">暂无 SLA 超时数据</p>
+                    <div v-for="item in workOrderStatistics.slaOverduePriorityCounts || []" :key="item.label" class="bar-row">
+                      <span>{{ item.label }}</span>
+                      <div class="bar-track"><span class="bar-fill warning" :style="{ width: statisticBarWidth(item.count, slaPriorityStatisticMax) }"></span></div>
                       <strong>{{ item.count }}</strong>
                     </div>
                   </section>
@@ -1213,6 +1765,18 @@ onMounted(() => {
                 <h3>用户管理</h3>
                 <el-button size="small" @click="loadAdminUsers()">刷新</el-button>
               </div>
+              <div class="section-actions">
+                <el-button size="small" :loading="isExcelWorking" @click="downloadUserTemplate">下载导入模板</el-button>
+                <el-button size="small" :loading="isExcelWorking" @click="userImportInput?.click()">批量导入用户</el-button>
+                <el-button
+                  v-if="lastImportErrorJobId"
+                  size="small"
+                  type="warning"
+                  :loading="isExcelWorking"
+                  @click="downloadLastImportErrorReport"
+                >下载错误报告</el-button>
+                <input ref="userImportInput" class="visually-hidden" type="file" accept=".xlsx" @change="uploadUserImport" />
+              </div>
               <el-form class="admin-user-filters" label-position="top" @submit.prevent="applyAdminUserFilters">
                 <el-form-item label="用户名或昵称">
                   <el-input v-model="adminUserFilters.keyword" clearable placeholder="搜索用户名或昵称" @clear="applyAdminUserFilters" />
@@ -1220,7 +1784,7 @@ onMounted(() => {
                 <el-button native-type="submit" type="primary">搜索</el-button>
               </el-form>
               <p class="item-meta">共 {{ adminUserTotal }} 个用户，第 {{ adminUserPage }} / {{ adminUserTotalPages || 1 }} 页，每页 {{ adminUserPageSize }} 个</p>
-              <p v-if="isAdminUsersLoading" class="empty-state">用户加载中</p>
+              <p v-if="isAdminUsersLoading" class="empty-state">用户加载</p>
               <p v-else-if="adminUsers.length === 0" class="empty-state">暂无用户</p>
               <div v-else class="user-management-list">
                 <article v-for="user in adminUsers" :key="user.id" class="user-management-item">
@@ -1228,6 +1792,9 @@ onMounted(() => {
                     <strong>{{ user.nickname }}（{{ user.username }}）</strong>
                     <span class="item-meta">
                       {{ roleLabel(user.role) }} · {{ user.enabled ? '已启用' : '已禁用' }} · 创建于 {{ formatTime(user.createdAt) }} · 更新于 {{ formatTime(user.updatedAt) }}
+                    </span>
+                    <span class="item-meta">
+                      {{ organizationLabel(user) }} · {{ orgStatusLabel(user.orgConfirmed) }} · {{ user.departmentAdmin ? '部门管理员' : '普通部门成员' }}
                     </span>
                   </div>
                   <div class="detail-actions">
@@ -1251,6 +1818,20 @@ onMounted(() => {
                       :loading="isAdminUsersLoading"
                       @click="setAdminUserRole(user, 'USER')"
                     >降级为用户</el-button>
+                    <el-button
+                      size="small"
+                      :type="user.orgConfirmed ? 'warning' : 'primary'"
+                      :disabled="!user.departmentId"
+                      :loading="isAdminUsersLoading"
+                      @click="setAdminUserOrganizationConfirmed(user, !user.orgConfirmed)"
+                    >{{ user.orgConfirmed ? '取消组织确认' : '确认组织归属' }}</el-button>
+                    <el-button
+                      size="small"
+                      :type="user.departmentAdmin ? 'warning' : 'success'"
+                      :disabled="!user.departmentId || !user.orgConfirmed"
+                      :loading="isAdminUsersLoading"
+                      @click="setUserDepartmentAdmin(user, !user.departmentAdmin)"
+                      >{{ user.departmentAdmin ? '取消部门管理员' : '设为部门管理员' }}</el-button>
                   </div>
                 </article>
               </div>
@@ -1271,6 +1852,9 @@ onMounted(() => {
               <div class="section-header">
                 <h3>&#31649;&#29702;&#21592;&#24037;&#21333;&#21015;&#34920;</h3>
                 <el-button size="small" @click="loadAdminWorkOrders">&#21047;&#26032;</el-button>
+              </div>
+              <div class="section-actions">
+                <el-button size="small" type="primary" :loading="isExcelWorking" @click="exportFilteredAdminWorkOrders">导出当前筛选</el-button>
               </div>
               <el-form class="admin-work-order-filters" label-position="top" @submit.prevent="applyAdminWorkOrderFilters">
                 <el-form-item label="&#26631;&#39064;&#20851;&#38190;&#23383;">
@@ -1319,8 +1903,9 @@ onMounted(() => {
                 <button v-for="item in adminWorkOrders" :key="item.id" class="work-order-item" type="button" @click="openWorkOrderDetail(item.id)">
                   <span class="item-title">{{ item.title }}</span>
                   <span class="item-meta">
-                    {{ item.status }} &#183; {{ item.priority }} &#183; &#21019;&#24314;&#20154; {{ item.creatorUsername }} &#183; &#22788;&#29702;&#20154; {{ item.handlerUsername || '\u672a\u5206\u914d' }} &#183; {{ formatTime(item.createdAt) }}
+                    {{ item.status }} &#183; {{ item.priority }} &#183; {{ item.departmentName || '未确认部门' }} &#183; &#21019;&#24314;&#20154; {{ item.creatorUsername }} &#183; &#22788;&#29702;&#20154; {{ item.handlerUsername || '\u672a\u5206\u914d' }} &#183; {{ formatTime(item.createdAt) }}
                   </span>
+                  <span class="item-meta">{{ slaSummary(item) }}</span>
                 </button>
               </div>
               <el-pagination
@@ -1378,7 +1963,8 @@ onMounted(() => {
               <div v-else class="work-order-list">
                 <button v-for="item in workOrders" :key="item.id" class="work-order-item" type="button" @click="openWorkOrderDetail(item.id)">
                   <span class="item-title">{{ item.title }}</span>
-                  <span class="item-meta">{{ item.status }} &#183; {{ item.priority }} &#183; {{ item.creatorUsername }} &#183; {{ formatTime(item.createdAt) }}</span>
+                  <span class="item-meta">{{ item.status }} &#183; {{ item.priority }} &#183; {{ item.departmentName || '未确认部门' }} &#183; {{ item.creatorUsername }} &#183; {{ formatTime(item.createdAt) }}</span>
+                  <span class="item-meta">{{ slaSummary(item) }}</span>
                 </button>
               </div>
               <el-pagination
@@ -1400,14 +1986,14 @@ onMounted(() => {
                 <el-form-item label="标题"><el-input v-model="workOrderForm.title" maxlength="120" placeholder="请输入标题" /></el-form-item>
                 <el-form-item label="详细描述"><el-input v-model="workOrderForm.description" type="textarea" :rows="4" placeholder="请输入详细描述" /></el-form-item>
                 <el-form-item label="工单类型"><el-input v-model="workOrderForm.type" maxlength="60" placeholder="例如：设备维修" /></el-form-item>
-                <el-form-item label="优先级">
-                  <el-select v-model="workOrderForm.priority" aria-label="优先级">
+                <el-form-item label="优先">
+                  <el-select v-model="workOrderForm.priority" aria-label="优先">
                     <el-option label="低" value="低" />
                     <el-option label="中" value="中" />
                     <el-option label="高" value="高" />
                   </el-select>
                 </el-form-item>
-                <el-button native-type="submit" type="primary">创建工单</el-button>
+                <el-button native-type="submit" type="primary" :loading="isWorkOrderCreateSubmitting">创建工单</el-button>
               </el-form>
             </section>
           </template>
@@ -1415,7 +2001,7 @@ onMounted(() => {
           <template v-else-if="currentView === 'workOrderDetail'">
             <el-alert v-if="workOrderMessage" :title="workOrderMessage" type="success" show-icon :closable="false" />
             <el-alert v-if="detailError" :title="detailError" type="error" show-icon :closable="false" />
-            <p v-if="isDetailLoading" class="empty-state">详情加载中</p>
+            <p v-if="isDetailLoading" class="empty-state">详情加载</p>
             <section v-else-if="selectedWorkOrder" class="profile-section detail-panel">
               <template v-if="isEditingWorkOrder">
                 <h3>修改工单</h3>
@@ -1423,8 +2009,8 @@ onMounted(() => {
                   <el-form-item label="标题"><el-input v-model="editWorkOrderForm.title" maxlength="120" /></el-form-item>
                   <el-form-item label="详细描述"><el-input v-model="editWorkOrderForm.description" type="textarea" :rows="4" /></el-form-item>
                   <el-form-item label="工单类型"><el-input v-model="editWorkOrderForm.type" maxlength="60" /></el-form-item>
-                  <el-form-item label="优先级">
-                    <el-select v-model="editWorkOrderForm.priority" aria-label="修改优先级">
+                  <el-form-item label="优先">
+                    <el-select v-model="editWorkOrderForm.priority" aria-label="修改优先">
                       <el-option label="低" value="低" />
                       <el-option label="中" value="中" />
                       <el-option label="高" value="高" />
@@ -1443,9 +2029,15 @@ onMounted(() => {
                   <div><dt>类型</dt><dd>{{ selectedWorkOrder.type }}</dd></div>
                   <div><dt>优先级</dt><dd>{{ selectedWorkOrder.priority }}</dd></div>
                   <div><dt>状态</dt><dd>{{ selectedWorkOrder.status }}</dd></div>
+                  <div><dt>所属部</dt><dd>{{ organizationLabel(selectedWorkOrder) }}</dd></div>
                   <div><dt>创建人</dt><dd>{{ selectedWorkOrder.creatorUsername }}</dd></div>
                   <div><dt>处理人</dt><dd>{{ selectedWorkOrder.handlerUsername || '未分配' }}</dd></div>
                   <div><dt>创建时间</dt><dd>{{ formatTime(selectedWorkOrder.createdAt) }}</dd></div>
+                  <div><dt>SLA 状态</dt><dd>{{ slaStatusLabel(selectedWorkOrder.slaStatus) }}</dd></div>
+                  <div><dt>首次响应截止</dt><dd>{{ selectedWorkOrder.firstResponseDueAt ? formatTime(selectedWorkOrder.firstResponseDueAt) : '未设置' }}</dd></div>
+                  <div><dt>解决截止</dt><dd>{{ selectedWorkOrder.resolutionDueAt ? formatTime(selectedWorkOrder.resolutionDueAt) : '未设置' }}</dd></div>
+                  <div><dt>首次响应时间</dt><dd>{{ selectedWorkOrder.firstRespondedAt ? formatTime(selectedWorkOrder.firstRespondedAt) : '未响应' }}</dd></div>
+                  <div><dt>解决时间</dt><dd>{{ selectedWorkOrder.resolvedAt ? formatTime(selectedWorkOrder.resolvedAt) : '未解决' }}</dd></div>
                 </dl>
                 <section class="attachment-section" aria-label="工单附件">
                   <div class="section-header">
@@ -1494,7 +2086,7 @@ onMounted(() => {
                           <span class="item-meta">{{ comment.authorUsername }} · {{ roleLabel(comment.authorRole) }} · {{ formatTime(comment.createdAt) }}</span>
                         </div>
                         <el-button
-                          v-if="isAdmin"
+                          v-if="isAdmin && hasPermission('ticket:comment')"
                           size="small"
                           type="danger"
                           plain
@@ -1539,7 +2131,7 @@ onMounted(() => {
                   </el-timeline>
                 </section>
                 <el-form v-if="canAssignSelectedWorkOrder" class="assignment-form" label-position="top" @submit.prevent="submitHandlerAssignment">
-                  <el-form-item label="选择处理人">
+                  <el-form-item label="选择处理">
                     <el-select
                       v-model="assignmentForm.handlerId"
                       filterable
@@ -1604,7 +2196,7 @@ onMounted(() => {
             <section class="profile-section">
               <h3>个人资料</h3>
               <p>用户名：{{ currentUser?.username }}</p>
-              <p>角色：{{ currentUser?.role }}</p>
+              <p>角色：{{ currentRoleLabels }}</p>
               <el-alert v-if="profileMessage" :title="profileMessage" type="success" show-icon :closable="false" />
               <el-alert v-if="profileError" :title="profileError" type="error" show-icon :closable="false" />
               <el-form class="auth-form" label-position="top" @submit.prevent="submitProfile">
@@ -1617,9 +2209,9 @@ onMounted(() => {
               <h3>修改密码</h3>
               <el-alert v-if="passwordError" :title="passwordError" type="error" show-icon :closable="false" />
               <el-form class="auth-form" label-position="top" @submit.prevent="submitPassword">
-                <el-form-item label="原密码"><el-input v-model="passwordForm.currentPassword" type="password" show-password /></el-form-item>
-                <el-form-item label="新密码"><el-input v-model="passwordForm.newPassword" type="password" show-password /></el-form-item>
-                <el-form-item label="确认新密码"><el-input v-model="passwordForm.confirmPassword" type="password" show-password /></el-form-item>
+                <el-form-item label="原密"><el-input v-model="passwordForm.currentPassword" type="password" show-password /></el-form-item>
+                <el-form-item label="新密"><el-input v-model="passwordForm.newPassword" type="password" show-password /></el-form-item>
+                <el-form-item label="确认新密"><el-input v-model="passwordForm.confirmPassword" type="password" show-password /></el-form-item>
                 <el-button native-type="submit" type="primary">修改密码</el-button>
               </el-form>
             </section>

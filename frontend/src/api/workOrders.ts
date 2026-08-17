@@ -11,6 +11,17 @@ export interface WorkOrder {
   creatorUsername: string;
   handlerId?: number | null;
   handlerUsername?: string | null;
+  companyId?: number | null;
+  companyName?: string | null;
+  departmentId?: number | null;
+  departmentName?: string | null;
+  teamId?: number | null;
+  teamName?: string | null;
+  firstResponseDueAt?: string | null;
+  resolutionDueAt?: string | null;
+  firstRespondedAt?: string | null;
+  resolvedAt?: string | null;
+  slaStatus?: string | null;
   createdAt: string;
 }
 
@@ -56,6 +67,7 @@ export interface CreateWorkOrderRequest {
   description: string;
   type: string;
   priority: string;
+  idempotencyKey?: string;
 }
 
 export interface CreateWorkOrderCommentRequest {

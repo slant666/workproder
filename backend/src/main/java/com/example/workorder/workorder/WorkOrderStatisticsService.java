@@ -1,5 +1,6 @@
 package com.example.workorder.workorder;
 
+import com.example.workorder.redis.RedisSupportService;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
@@ -33,23 +34,43 @@ public class WorkOrderStatisticsService {
 
     private final JdbcTemplate jdbcTemplate;
     private final Clock clock;
+    private final RedisSupportService redisSupportService;
+    private Boolean slaColumnsAvailable;
+
+    public WorkOrderStatisticsService(JdbcTemplate jdbcTemplate) {
+        this(jdbcTemplate, Clock.systemUTC(), null);
+    }
 
     @Autowired
-    public WorkOrderStatisticsService(JdbcTemplate jdbcTemplate) {
-        this(jdbcTemplate, Clock.systemUTC());
+    public WorkOrderStatisticsService(JdbcTemplate jdbcTemplate, RedisSupportService redisSupportService) {
+        this(jdbcTemplate, Clock.systemUTC(), redisSupportService);
     }
 
     WorkOrderStatisticsService(JdbcTemplate jdbcTemplate, Clock clock) {
+        this(jdbcTemplate, clock, null);
+    }
+
+    WorkOrderStatisticsService(JdbcTemplate jdbcTemplate, Clock clock, RedisSupportService redisSupportService) {
         this.jdbcTemplate = jdbcTemplate;
         this.clock = clock;
+        this.redisSupportService = redisSupportService;
     }
 
     public WorkOrderStatisticsResponse dashboard(WorkOrderStatisticsQuery query) {
         NormalizedStatisticsQuery normalized = normalize(query);
+        WorkOrderStatisticsQuery normalizedQuery = new WorkOrderStatisticsQuery(
+                normalized.createdFromText(),
+                normalized.createdToText());
+        if (redisSupportService != null) {
+            WorkOrderStatisticsResponse cached = redisSupportService.getStatistics(normalizedQuery);
+            if (cached != null) {
+                return cached;
+            }
+        }
         List<Object> params = new ArrayList<>();
         String where = buildCreatedAtWhere(normalized, params);
 
-        return new WorkOrderStatisticsResponse(
+        WorkOrderStatisticsResponse response = new WorkOrderStatisticsResponse(
                 total(where, params),
                 groupedCounts("status", STATUS_ORDER, where, params),
                 groupedCounts("priority", PRIORITY_ORDER, where, params),
@@ -57,8 +78,16 @@ public class WorkOrderStatisticsService {
                 averageProcessingMinutes(where, params),
                 adminProcessingCounts(where, params),
                 overdueUnhandledCount(where, params),
+                slaStatusCount("NEAR_OVERDUE", where, params),
+                slaStatusCount("FIRST_RESPONSE_OVERDUE", where, params),
+                slaStatusCount("RESOLUTION_OVERDUE", where, params),
+                slaOverduePriorityCounts(where, params),
                 AVERAGE_PROCESSING_RULE,
                 OVERDUE_RULE);
+        if (redisSupportService != null) {
+            redisSupportService.putStatistics(normalizedQuery, response);
+        }
+        return response;
     }
 
     private long total(String where, List<Object> params) {
@@ -160,6 +189,56 @@ public class WorkOrderStatisticsService {
         return count == null ? 0 : count;
     }
 
+    private long slaStatusCount(String slaStatus, String where, List<Object> params) {
+        if (!hasSlaColumns()) {
+            return 0;
+        }
+        List<Object> allParams = new ArrayList<>(params);
+        allParams.add(slaStatus);
+        Long count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM work_orders wo" + where
+                        + (where.isBlank() ? " WHERE" : " AND")
+                        + " wo.sla_status = ?",
+                Long.class,
+                allParams.toArray());
+        return count == null ? 0 : count;
+    }
+
+    private List<WorkOrderCountResponse> slaOverduePriorityCounts(String where, List<Object> params) {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        for (String label : PRIORITY_ORDER) {
+            counts.put(label, 0L);
+        }
+        if (!hasSlaColumns()) {
+            return counts.entrySet().stream()
+                    .map(entry -> new WorkOrderCountResponse(entry.getKey(), entry.getValue()))
+                    .toList();
+        }
+        jdbcTemplate.query(
+                "SELECT wo.priority AS label, COUNT(*) AS count FROM work_orders wo"
+                        + where
+                        + (where.isBlank() ? " WHERE" : " AND")
+                        + " wo.sla_status IN ('FIRST_RESPONSE_OVERDUE', 'RESOLUTION_OVERDUE') GROUP BY wo.priority",
+                (RowCallbackHandler) rs -> counts.put(rs.getString("label"), rs.getLong("count")),
+                params.toArray());
+        return counts.entrySet().stream()
+                .map(entry -> new WorkOrderCountResponse(entry.getKey(), entry.getValue()))
+                .toList();
+    }
+
+    private boolean hasSlaColumns() {
+        if (slaColumnsAvailable != null) {
+            return slaColumnsAvailable;
+        }
+        try {
+            jdbcTemplate.queryForList("SELECT sla_status FROM work_orders WHERE 1 = 0");
+            slaColumnsAvailable = true;
+        } catch (RuntimeException ex) {
+            slaColumnsAvailable = false;
+        }
+        return slaColumnsAvailable;
+    }
+
     private String buildCreatedAtWhere(NormalizedStatisticsQuery query, List<Object> params) {
         List<String> clauses = new ArrayList<>();
         if (query.createdFrom() != null) {
@@ -174,15 +253,17 @@ public class WorkOrderStatisticsService {
     }
 
     private NormalizedStatisticsQuery normalize(WorkOrderStatisticsQuery query) {
-        Instant createdFrom = parseDate(query == null ? null : query.createdFrom(), "\u5f00\u59cb\u65e5\u671f\u683c\u5f0f\u4e0d\u6b63\u786e");
-        Instant createdToExclusive = parseDate(query == null ? null : query.createdTo(), "\u7ed3\u675f\u65e5\u671f\u683c\u5f0f\u4e0d\u6b63\u786e");
+        String createdFromText = blankToNull(query == null ? null : query.createdFrom());
+        String createdToText = blankToNull(query == null ? null : query.createdTo());
+        Instant createdFrom = parseDate(createdFromText, "\u5f00\u59cb\u65e5\u671f\u683c\u5f0f\u4e0d\u6b63\u786e");
+        Instant createdToExclusive = parseDate(createdToText, "\u7ed3\u675f\u65e5\u671f\u683c\u5f0f\u4e0d\u6b63\u786e");
         if (createdToExclusive != null) {
             createdToExclusive = createdToExclusive.plus(Duration.ofDays(1));
         }
         if (createdFrom != null && createdToExclusive != null && !createdFrom.isBefore(createdToExclusive)) {
             throw new WorkOrderException("\u5f00\u59cb\u65e5\u671f\u4e0d\u80fd\u665a\u4e8e\u7ed3\u675f\u65e5\u671f");
         }
-        return new NormalizedStatisticsQuery(createdFrom, createdToExclusive);
+        return new NormalizedStatisticsQuery(createdFrom, createdToExclusive, createdFromText, createdToText);
     }
 
     private Instant parseDate(String value, String message) {
@@ -203,7 +284,18 @@ public class WorkOrderStatisticsService {
         return allParams;
     }
 
-    private record NormalizedStatisticsQuery(Instant createdFrom, Instant createdToExclusive) {
+    private String blankToNull(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private record NormalizedStatisticsQuery(
+            Instant createdFrom,
+            Instant createdToExclusive,
+            String createdFromText,
+            String createdToText) {
     }
 
     private record ProcessingWindow(Instant acceptedAt, Instant completedAt) {

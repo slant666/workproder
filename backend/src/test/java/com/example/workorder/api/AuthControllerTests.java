@@ -10,7 +10,9 @@ import com.example.workorder.auth.AuthService;
 import com.example.workorder.auth.BootstrapAdminService;
 import com.example.workorder.auth.CurrentUser;
 import com.example.workorder.auth.CsrfTokenService;
+import com.example.workorder.auth.EmailVerificationService;
 import com.example.workorder.auth.LoginRequest;
+import com.example.workorder.auth.PasswordResetService;
 import com.example.workorder.auth.PermissionService;
 import com.example.workorder.auth.ProfileService;
 import com.example.workorder.auth.RegisterRequest;
@@ -152,6 +154,8 @@ class AuthControllerTests {
                 authService,
                 org.mockito.Mockito.mock(ProfileService.class),
                 new PermissionService(),
-                csrfTokenService);
+                csrfTokenService,
+                org.mockito.Mockito.mock(PasswordResetService.class),
+                org.mockito.Mockito.mock(EmailVerificationService.class));
     }
 }

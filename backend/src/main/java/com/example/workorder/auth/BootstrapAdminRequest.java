@@ -16,5 +16,13 @@ public record BootstrapAdminRequest(
         String password,
 
         @NotBlank(message = "Password confirmation is required")
-        String confirmPassword) {
+        String confirmPassword,
+
+        Long companyId,
+        Long departmentId,
+        Long teamId) {
+
+    public BootstrapAdminRequest(String username, String nickname, String password, String confirmPassword) {
+        this(username, nickname, password, confirmPassword, null, null, null);
+    }
 }

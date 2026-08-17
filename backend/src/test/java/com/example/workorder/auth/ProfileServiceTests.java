@@ -21,6 +21,12 @@ class ProfileServiceTests {
         DriverManagerDataSource dataSource = new DriverManagerDataSource("jdbc:h2:mem:profile;MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         jdbcTemplate = new JdbcTemplate(dataSource);
         jdbcTemplate.execute("DROP TABLE IF EXISTS users");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS teams");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS departments");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS companies");
+        jdbcTemplate.execute("CREATE TABLE companies (id BIGINT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(120), enabled BOOLEAN DEFAULT TRUE)");
+        jdbcTemplate.execute("CREATE TABLE departments (id BIGINT PRIMARY KEY AUTO_INCREMENT, company_id BIGINT, name VARCHAR(120), enabled BOOLEAN DEFAULT TRUE)");
+        jdbcTemplate.execute("CREATE TABLE teams (id BIGINT PRIMARY KEY AUTO_INCREMENT, company_id BIGINT, department_id BIGINT, name VARCHAR(120), enabled BOOLEAN DEFAULT TRUE)");
         jdbcTemplate.execute("""
                 CREATE TABLE users (
                     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -28,12 +34,18 @@ class ProfileServiceTests {
                     nickname VARCHAR(60) NOT NULL,
                     password_hash VARCHAR(100) NOT NULL,
                     role VARCHAR(30) NOT NULL DEFAULT 'USER',
-                    enabled BOOLEAN NOT NULL DEFAULT TRUE
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                    company_id BIGINT NULL,
+                    department_id BIGINT NULL,
+                    team_id BIGINT NULL,
+                    org_confirmed BOOLEAN NOT NULL DEFAULT FALSE
                 )
                 """);
+        jdbcTemplate.update("INSERT INTO companies (name, enabled) VALUES ('Default Company', TRUE)");
+        jdbcTemplate.update("INSERT INTO departments (company_id, name, enabled) VALUES (1, 'Default Department', TRUE)");
         passwordEncoder = new BCryptPasswordEncoder();
         profileService = new ProfileService(jdbcTemplate, passwordEncoder);
-        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled) VALUES (?, ?, ?, ?, TRUE)",
+        jdbcTemplate.update("INSERT INTO users (username, nickname, password_hash, role, enabled, company_id, department_id, org_confirmed) VALUES (?, ?, ?, ?, TRUE, 1, 1, TRUE)",
                 "demo", "旧昵称", passwordEncoder.encode("password123"), "USER");
     }
 
