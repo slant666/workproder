@@ -6,6 +6,7 @@ import com.example.workorder.notification.NotificationService;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.sql.Timestamp;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -94,7 +95,7 @@ class SlaServiceTests {
 
     @Test
     void scanOpenWorkOrdersMarksOverdueAndNotifiesRecipientsOnce() {
-        insertWorkOrder(100L, "Overdue", "\u9ad8", "\u5f85\u5904\u7406", "2026-08-11 16:59:00", "2026-08-11 22:00:00");
+        insertWorkOrder(100L, "Overdue", "\u9ad8", "\u5f85\u5904\u7406", "2026-08-11T09:59:00Z", "2026-08-11T14:00:00Z");
 
         service.scanOpenWorkOrders();
         service.scanOpenWorkOrders();
@@ -111,7 +112,7 @@ class SlaServiceTests {
 
     @Test
     void scanOpenWorkOrdersMarksNearOverdueWithNearNotificationType() {
-        insertWorkOrder(101L, "Near", "\u9ad8", "\u5f85\u5904\u7406", "2026-08-11 18:20:00", "2026-08-11 22:00:00");
+        insertWorkOrder(101L, "Near", "\u9ad8", "\u5f85\u5904\u7406", "2026-08-11T10:20:00Z", "2026-08-11T14:00:00Z");
 
         service.scanOpenWorkOrders();
 
@@ -142,7 +143,7 @@ class SlaServiceTests {
                 title,
                 priority,
                 status,
-                firstResponseDueAt,
-                resolutionDueAt);
+                Timestamp.from(Instant.parse(firstResponseDueAt)),
+                Timestamp.from(Instant.parse(resolutionDueAt)));
     }
 }

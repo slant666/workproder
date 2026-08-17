@@ -689,3 +689,20 @@ T024: 组织架构与部门级工单权限。
 - The first GitHub Actions run failed during action resolution before project tests started.
 - Root cause from run `32039774680`: `Unable to resolve action aquasecurity/trivy-action@0.28.0, unable to find version 0.28.0`.
 - Fixed `.github/workflows/ci.yml` to use `aquasecurity/trivy-action@v0.36.0`.
+
+## Latest Note - CI SLA Test Timezone Fix
+
+- The next GitHub Actions run progressed through frontend install/test/type-check/build and failed at backend tests.
+- Root cause from run `32040041065`:
+  - `SlaServiceTests.scanOpenWorkOrdersMarksOverdueAndNotifiesRecipientsOnce` expected `FIRST_RESPONSE_OVERDUE` but got `NORMAL`.
+  - `SlaServiceTests.scanOpenWorkOrdersMarksNearOverdueWithNearNotificationType` expected `NEAR_OVERDUE` but got `NORMAL`.
+- Cause:
+  - The tests inserted H2 timestamp values as local datetime strings such as `2026-08-11 16:59:00`.
+  - Local Windows/Asia-Shanghai interpreted those as China local time, so they were before the fixed UTC test clock.
+  - GitHub Ubuntu runner used UTC, so the same strings were interpreted as future UTC times and no SLA warning/overdue status was set.
+- Fix:
+  - `SlaServiceTests` now inserts deadline timestamps with `Timestamp.from(Instant.parse(...Z))`.
+  - Test expectations no longer depend on machine timezone.
+- Verification:
+  - Targeted backend `mvn test -Dtest=SlaServiceTests`: BUILD SUCCESS, 2 tests run, 0 failures.
+  - Full backend `mvn test`: BUILD SUCCESS, 135 tests run, 0 failures, 0 errors, 0 skipped.
