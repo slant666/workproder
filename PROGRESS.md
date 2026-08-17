@@ -652,3 +652,34 @@ T024: 组织架构与部门级工单权限。
 - Notes:
   - WebSocket events intentionally carry minimal data to avoid leaking unauthorized work-order details on broadcast refresh events.
   - Existing REST endpoints and database notifications remain the source of truth; WebSocket is a realtime refresh/notification transport.
+
+## Latest Note - GitHub Actions CI Implementation
+
+- Implemented the first automated delivery pipeline for the project.
+- Added `.github/workflows/ci.yml`.
+- Pipeline runs on pushes and pull requests targeting `main`.
+- Workflow stages:
+  - Checkout source.
+  - Set up Java 21 with Maven cache.
+  - Set up Node 22 with npm cache.
+  - Install frontend dependencies with `npm ci`.
+  - Run frontend tests with `npm run test`.
+  - Run frontend type check with `npx vue-tsc --noEmit`.
+  - Build frontend with `npm run build`.
+  - Run backend tests with `mvn -B test`.
+  - Run frontend dependency security check with `npm audit --audit-level=critical`.
+  - Run Trivy filesystem security scan for critical vulnerabilities/secrets/misconfigurations.
+  - Validate Docker Compose config.
+  - Build Docker images with `docker compose build`.
+  - Run Trivy critical vulnerability scans on backend and frontend images.
+  - Deploy a temporary test environment with `docker compose up -d`.
+  - Wait for the frontend service to become healthy and fail early on unhealthy services.
+  - Health-check backend `/api/system/status` from inside the backend container.
+  - Health-check frontend through `http://127.0.0.1:8088/`.
+  - Collect Docker logs on failure and tear the environment down with volumes.
+- CI uses explicit non-secret test environment variables so GitHub's clean runner does not depend on the local `.env`.
+- Local verification:
+  - `docker compose config --quiet`: passed.
+- Note:
+  - GitHub Actions itself will only run after this workflow file is pushed to GitHub.
+  - The first security gate is intentionally critical-only to keep the initial pipeline useful without making it noisy; it can be tightened to high/critical later.
