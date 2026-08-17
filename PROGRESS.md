@@ -706,3 +706,18 @@ T024: 组织架构与部门级工单权限。
 - Verification:
   - Targeted backend `mvn test -Dtest=SlaServiceTests`: BUILD SUCCESS, 2 tests run, 0 failures.
   - Full backend `mvn test`: BUILD SUCCESS, 135 tests run, 0 failures, 0 errors, 0 skipped.
+
+## Latest Note - CI Critical Dependency Vulnerability Fix
+
+- GitHub Actions run `32040273520` progressed through backend tests and failed at `Filesystem security scan`.
+- Trivy found 4 critical vulnerabilities in `backend/pom.xml`:
+  - `org.apache.tomcat.embed:tomcat-embed-core` 10.1.48, fixed in 10.1.55.
+  - `org.bouncycastle:bcprov-jdk18on` 1.78.1, fixed in 1.80.2/1.81.1/1.84.
+- Fixed by adding backend Maven `dependencyManagement` overrides:
+  - `tomcat-embed-core` -> 10.1.55.
+  - `bcprov-jdk18on` -> 1.84.
+- Verification:
+  - Backend `mvn test`: BUILD SUCCESS, 135 tests run, 0 failures, 0 errors, 0 skipped.
+  - Backend dependency tree confirmed:
+    - `org.apache.tomcat.embed:tomcat-embed-core:jar:10.1.55`.
+    - `org.bouncycastle:bcprov-jdk18on:jar:1.84`.
