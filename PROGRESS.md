@@ -799,4 +799,9 @@ T024: 组织架构与部门级工单权限。
 - Verification:
   - Backend `mvn -B test`: BUILD SUCCESS, 135 tests run, 0 failures, 0 errors, 0 skipped.
   - Dependency tree confirms Netty `4.1.137.Final` and Tomcat `11.0.25` across their managed modules.
-- Pending: the GitHub Actions run triggered by the push.
+- GitHub Actions run `36140776324` passed end-to-end:
+  - Filesystem security scan passed with no critical findings.
+  - Backend and frontend image scans passed.
+  - Docker Compose test deployment passed.
+  - Backend and frontend health checks passed.
+- Current commit `168d5eb` is pushed to `origin/main`.
