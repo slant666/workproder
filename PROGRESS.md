@@ -805,3 +805,18 @@ T024: 组织架构与部门级工单权限。
   - Docker Compose test deployment passed.
   - Backend and frontend health checks passed.
 - Current commit `168d5eb` is pushed to `origin/main`.
+
+## Latest Note - Documentation Status Correction
+
+- Corrected the README roadmap after noticing that completed work was still listed as future work.
+- Moved implemented capabilities to a current-status section:
+  - Email, in-app, and WebSocket notifications.
+  - SLA deadlines, priority rules, timeout scanning, and reminders.
+  - Multi-department organization, RBAC roles, and department data scope.
+  - Redis login rate limiting and statistics caching.
+  - GitHub Actions CI with tests, security scans, Docker validation, deployment, and health checks.
+- Kept genuinely unfinished items under future extensions:
+  - OpenAPI/Swagger UI.
+  - Object storage and attachment preview.
+  - Audit-log query/export UI.
+  - A standalone work-order category dictionary maintenance feature.
