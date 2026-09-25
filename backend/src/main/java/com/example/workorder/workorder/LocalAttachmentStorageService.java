@@ -4,14 +4,12 @@ import java.io.IOException;
 import java.net.MalformedURLException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 @Service
-@ConditionalOnProperty(prefix = "app.attachments", name = "storage-provider", havingValue = "local", matchIfMissing = true)
 public class LocalAttachmentStorageService implements AttachmentStorageService {
 
     private final Path uploadDir;

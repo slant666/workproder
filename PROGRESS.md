@@ -752,3 +752,38 @@ T024: 组织架构与部门级工单权限。
   - GitHub Actions rerun via empty commit `57c20ae`, run `32042155285`: passed end-to-end in 3m56s.
 - Remaining advisory only:
   - GitHub annotated that `actions/setup-java@v4` is deprecated and should later move to `v5`.
+
+## Latest Note - Deployment Simplification
+
+- Removed the MinIO deployment path because the server deployment only needs local attachment storage and the backend already persists uploads in the `backend-uploads` Docker volume.
+- Removed the MinIO Compose service, ports, volume, environment variables, Maven client dependency, MinIO storage implementation, and unused MinIO configuration properties.
+- Kept `V22__add_attachment_object_storage.sql` unchanged because applied Flyway migrations must not be edited. Existing attachments that are still stored in a MinIO bucket require a one-time migration before switching an existing production database to this version.
+- Redis and RabbitMQ remain because the backend uses them for optional statistics/login acceleration and asynchronous email/file jobs. They were not removed in this cleanup.
+- Verification completed:
+  - Backend `mvn -B test`: BUILD SUCCESS, 135 tests run, 0 failures, 0 errors, 0 skipped.
+  - Frontend `npm.cmd run test`: 1 test file passed, 41 tests passed.
+  - Frontend `npm.cmd run build`: BUILD SUCCESS.
+  - `docker compose --env-file .env.example config --quiet`: passed.
+  - Residual runtime scan found no `MinIO`, `WORK_ORDER_MINIO`, or `storage-provider` references outside historical progress notes.
+  - Docker image build was not completed because Docker Desktop's Linux engine was unavailable on this machine (`dockerDesktopLinuxEngine` named pipe missing).
+- Deployment behavior after this change:
+  - Run `Copy-Item .env.example .env`, replace the private placeholder values, then run `docker compose up -d --build`.
+  - Attachments are stored in the `backend-uploads` volume; back up that volume together with MySQL.
+- Status: complete. No required cleanup steps remain; only Docker image build verification should be rerun after Docker Desktop/Linux engine is available.
+
+## Latest Note - Server Deployment
+
+- SSH key login to `admin@101.200.178.192` is configured and working.
+- Server project path is `/home/admin/demo/workproder`.
+- Previous server project directory was preserved as `/home/admin/demo/workproder-backup-20260925-200152`.
+- Existing MySQL and attachment Docker volumes were preserved.
+- Production Compose was tightened so only frontend port `8088` is exposed; MySQL, Redis, and RabbitMQ stay on the internal Compose network.
+- The first server backend image build was stopped after more than 18 minutes of Maven dependency downloads. The backend Dockerfile was simplified by removing the redundant `mvn dependency:go-offline` layer; the image will be rebuilt with the normal `mvn -B package -DskipTests` step.
+- The rebuilt backend and frontend images completed successfully. All five services are running and healthy:
+  - MySQL, Redis, RabbitMQ, backend, and frontend.
+  - Backend internal status endpoint returned `{"status":"ok"}`.
+  - Frontend returned HTTP 200 from the server itself.
+- Only TCP port `8088` is published by Compose. MySQL, Redis, and RabbitMQ are no longer exposed on host ports.
+- Existing volumes `workproder_mysql-data` and `workproder_backend-uploads` are still present and were not deleted.
+- After the Alibaba Cloud inbound rule was added, public verification succeeded from the local workstation when bypassing its local proxy: `http://101.200.178.192:8088/` returned HTTP 200 and TCP 8088 connected successfully.
+- Server memory is currently about `1.8 GiB`; services are healthy, but upgrading to at least 4 GiB remains recommended for production stability.

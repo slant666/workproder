@@ -194,7 +194,7 @@ http://localhost:5173
 
 ## Docker 部署说明
 
-Docker 方式适合一键启动完整环境，包含 Nginx 前端、Spring Boot 后端、MySQL 8。
+Docker 方式适合一键启动完整环境，包含 Nginx 前端、Spring Boot 后端、MySQL 8、Redis 和 RabbitMQ。工单附件直接保存到后端的持久化 Docker 卷，不需要额外的对象存储服务。
 
 ### 首次配置
 

@@ -127,7 +127,8 @@ docker run --rm -v work-order-system_backend-uploads:/data -v ${PWD}\deploy\back
 ## Ports
 
 - Frontend: host `8088` to container `80`.
-- MySQL: host `3307` to container `3306`.
+- Redis and RabbitMQ are internal Compose services and are not required to be exposed publicly.
+- MySQL is internal to the Compose network and is not exposed to the host.
 - Backend is not exposed to the host by default; Nginx proxies `/api` to it through the Compose network.
 - The Compose database username/password variables use the `WORK_ORDER_CONTAINER_*` prefix so they do not conflict with local development environment variables such as `WORK_ORDER_DB_USERNAME=root`.
 
@@ -135,5 +136,4 @@ Change host ports in `.env` if needed:
 
 ```text
 WORK_ORDER_HTTP_PORT=8088
-WORK_ORDER_MYSQL_HOST_PORT=3307
 ```
