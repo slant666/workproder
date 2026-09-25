@@ -787,3 +787,16 @@ T024: 组织架构与部门级工单权限。
 - Existing volumes `workproder_mysql-data` and `workproder_backend-uploads` are still present and were not deleted.
 - After the Alibaba Cloud inbound rule was added, public verification succeeded from the local workstation when bypassing its local proxy: `http://101.200.178.192:8088/` returned HTTP 200 and TCP 8088 connected successfully.
 - Server memory is currently about `1.8 GiB`; services are healthy, but upgrading to at least 4 GiB remains recommended for production stability.
+
+## Latest Note - CI Dependency Scan Follow-up
+
+- GitHub Actions run `36137571147` passed frontend tests/build, backend tests, and frontend dependency scanning, but the filesystem Trivy scan found four critical dependency vulnerabilities:
+  - Netty Handler `4.1.128.Final`, fixed in `4.1.137.Final`.
+  - Tomcat Embed Core `10.1.55`, fixed in `10.1.58`; three CVEs were reported.
+- Updated Maven properties to align the complete Netty and Tomcat dependency families at fixed versions. Tomcat uses `11.0.25`, one of the scanner's listed fixed lines, because the scanner-listed `10.1.58` artifact is not published in Maven Central.
+- Updated `actions/checkout`, `actions/setup-java`, and `actions/setup-node` to their v5 releases to remove the Node.js 20/setup-java v4 deprecation warnings.
+- Removed obsolete MinIO and host-port variables from the CI environment.
+- Verification:
+  - Backend `mvn -B test`: BUILD SUCCESS, 135 tests run, 0 failures, 0 errors, 0 skipped.
+  - Dependency tree confirms Netty `4.1.137.Final` and Tomcat `11.0.25` across their managed modules.
+- Pending: the GitHub Actions run triggered by the push.
